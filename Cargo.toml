@@ -1,0 +1,69 @@
+[package]
+name = "trendradar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/platform",
+    "crates/embedded",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["TrendRadar Contributors"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+rusqlite = { version = "0.32", features = ["bundled"] }
+quick-xml = { version = "0.37", features = ["serialize"] }
+regex = "1"
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "macros", "fs"] }
+askama = "0.12"
+lettre = { version = "0.11", default-features = false, features = ["builder", "rustls-tls", "smtp-transport", "tokio1", "tokio1-rustls"] }
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+thiserror = "2"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+sha1 = "0.10"
+base64 = "0.22"
+cron = "0.15"
+rand = "0.9"
+dotenvy = "0.15"
+
+[dependencies]
+trendradar-core = { path = "crates/core" }
+trendradar-platform = { path = "crates/platform" }
+askama.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+dotenvy.workspace = true
+
+[profile.release]
+codegen-units = 1
+opt-level = "z"
+strip = true
+
+[profile.mips]
+inherits = "release"
+opt-level = "s"

@@ -1,0 +1,28 @@
+# Rust build
+/target/
+
+# Environment (contains secrets)
+.env
+
+# Cross-compile binary
+/deploy/trendradar
+
+# Real config (use config.example.yaml as template)
+config/config.yaml
+deploy/config/config.yaml
+
+# Build artifacts
+/output/
+/data/
+*.exe
+*.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

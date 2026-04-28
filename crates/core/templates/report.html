@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<div class="container">
+    <div class="header">
+        <div class="header-watermark">TrendRadar</div>
+        <div class="header-title">热点新闻分析</div>
+        <div class="header-info">
+            <div class="info-item">
+                <span class="info-label">报告类型</span>
+                <span class="info-value">{{ mode_label }}</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">新闻总数</span>
+                <span class="info-value">{{ total_items }} 条</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">热点新闻</span>
+                <span class="info-value">{{ hot_news_count }} 条</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">生成时间</span>
+                <span class="info-value">{{ generation_time }}</span>
+            </div>
+        </div>
+    </div>
+    <div class="content">
+        {% if show_error %}
+        <div class="error-section">
+            <div class="error-title">⚠️ 请求失败的平台</div>
+            <ul class="error-list">
+                {% for id in failed_ids %}
+                <li class="error-item">{{ id }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        {% if show_ai %}
+        <div class="ai-section">
+            <div class="ai-section-header">
+                <div class="ai-section-title">✨ AI 热点分析</div>
+                <span class="ai-section-badge">AI</span>
+            </div>
+            {% for block in ai_blocks %}
+            <div class="ai-block">
+                <div class="ai-block-title">{{ block.title }}</div>
+                <div class="ai-block-content">{{ block.content }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% if show_stats %}
+        {% for stat in stats %}
+        <div class="word-group">
+            <div class="word-header">
+                <div class="word-info">
+                    <div class="word-name">{{ stat.word }}</div>
+                    <div class="word-count{% if stat.count >= 10 %} hot{% else if stat.count >= 5 %} warm{% endif %}">{{ stat.count }} 条</div>
+                </div>
+                <div class="word-index">{{ stat.index }}/{{ stats.len() }}</div>
+            </div>
+            {% for title in stat.titles %}
+            <div class="news-item{% if title.is_new %} new{% endif %}">
+                <div class="news-number">{{ title.number }}</div>
+                <div class="news-content">
+                    <div class="news-header">
+                        <span class="source-name">{{ title.source_name }}</span>
+                        {% if !title.keyword.is_empty() %}
+                        <span class="keyword-tag">[{{ title.keyword }}]</span>
+                        {% endif %}
+                        {% if title.rank_text.len() > 0 %}
+                        <span class="rank-num{% if title.rank_class.len() > 0 %} {{ title.rank_class }}{% endif %}">{{ title.rank_text }}</span>
+                        {% endif %}
+                        {% if !title.trend_arrow.is_empty() %}
+                        <span class="trend-arrow">{{ title.trend_arrow }}</span>
+                        {% endif %}
+                        {% if !title.time_display.is_empty() %}
+                        <span class="time-info">{{ title.time_display }}</span>
+                        {% endif %}
+                        {% if title.title_count > 1 %}
+                        <span class="count-info">{{ title.title_count }}次</span>
+                        {% endif %}
+                    </div>
+                    <div class="news-title">
+                        {% if !title.url.is_empty() %}
+                        <a href="{{ title.url }}" target="_blank" class="news-link">{{ title.title }}</a>
+                        {% else %}
+                        {{ title.title }}
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+        {% endif %}
+        {% if show_new_section %}
+        <div class="new-section">
+            <div class="new-section-title">🆕 新增热点 (共 {{ total_new_count }} 条)</div>
+            {% for source in new_titles %}
+            <div class="new-source-group">
+                <div class="new-source-title">{{ source.source_name }}</div>
+                {% for title in source.titles %}
+                <div class="new-item">
+                    <div class="new-item-number">{{ title.number }}</div>
+                    {% if title.rank_text.len() > 0 %}
+                    <div class="new-item-rank{% if title.rank_class.len() > 0 %} {{ title.rank_class }}{% endif %}">{{ title.rank_text }}</div>
+                    {% endif %}
+                    <div class="new-item-content">
+                        <div class="new-item-title">
+                            {% if !title.url.is_empty() %}
+                            <a href="{{ title.url }}" target="_blank" class="news-link">{{ title.title }}</a>
+                            {% else %}
+                            {{ title.title }}
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% if show_rss %}
+        <div class="rss-section section-divider">
+            <div class="rss-section-header">
+                <div class="rss-section-title">📰 RSS 订阅更新</div>
+                <div class="rss-section-count">{{ rss_total }} 条</div>
+            </div>
+            {% for group in rss_groups %}
+            <div class="feed-group">
+                <div class="feed-header">
+                    <div class="feed-name">{{ group.name }}</div>
+                    <div class="feed-count">{{ group.count }} 条</div>
+                </div>
+                {% for item in group.items %}
+                <div class="rss-item">
+                    <div class="rss-meta">
+                        {% if !item.time_display.is_empty() %}
+                        <span class="rss-time">{{ item.time_display }}</span>
+                        {% endif %}
+                        {% if !item.source_name.is_empty() %}
+                        <span class="rss-author">{{ item.source_name }}</span>
+                        {% endif %}
+                        {% if item.is_new %}
+                        <span class="rss-author" style="color: #dc2626;">NEW</span>
+                        {% endif %}
+                    </div>
+                    <div class="rss-title">
+                        {% if !item.url.is_empty() %}
+                        <a href="{{ item.url }}" target="_blank" class="rss-link">{{ item.title }}</a>
+                        {% else %}
+                        {{ item.title }}
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    <div class="footer">
+        <div class="footer-text">
+            <span class="project-name">TrendRadar</span> · 多平台热点聚合与智能分析系统 ·
+            <a href="https://github.com/sansan0/TrendRadar" target="_blank" class="footer-link">GitHub</a>
+        </div>
+    </div>
+</div>
+{% endblock %}
