@@ -42,7 +42,6 @@ sha1 = "0.10"
 base64 = "0.22"
 cron = "0.15"
 rand = "0.9"
-dotenvy = "0.15"
 
 [dependencies]
 trendradar-core = { path = "crates/core" }
@@ -57,7 +56,6 @@ chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
-dotenvy.workspace = true
 
 [profile.release]
 codegen-units = 1

@@ -92,7 +92,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("TrendRadar v{} 启动中...", env!("CARGO_PKG_VERSION"));
     tracing::info!("配置文件: {}", &cli.config);
 
-    let _ = dotenvy::dotenv();
+    load_dotenv();
     if std::env::var("SMTP_PASSWORD").is_ok() || std::env::var("AI_API_KEY").is_ok() {
         tracing::info!(".env 环境变量覆盖已生效");
     }
@@ -272,6 +272,29 @@ fn run_doctor(config: &AppConfig) {
     }
 
     println!("\n=== 诊断完成 ===");
+}
+
+fn load_dotenv() {
+    let path = std::path::Path::new(".env");
+    if !path.exists() {
+        return;
+    }
+    if let Ok(contents) = std::fs::read_to_string(path) {
+        for line in contents.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if let Some(eq) = trimmed.find('=') {
+                let key = trimmed[..eq].trim();
+                let val = trimmed[eq + 1..].trim();
+                let val = val.trim_matches('"').trim_matches('\'');
+                if !key.is_empty() {
+                    std::env::set_var(key, val);
+                }
+            }
+        }
+    }
 }
 
 fn load_ai_prompt(config: &trendradar_core::config::AiAnalysisSettings, _global_ai: &Option<&trendradar_core::config::AiSettings>, base_dir: &std::path::Path) -> (String, String) {
