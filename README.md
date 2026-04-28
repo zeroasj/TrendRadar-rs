@@ -147,6 +147,28 @@ docker run --rm \
 
 编译其他架构只需换 Docker 镜像标签，参考 [rust-musl-cross](https://github.com/messense/rust-musl-cross) 项目。
 
+### 1.3 二进制文件需要配套文件
+
+编译出来的只是一个二进制文件，运行时需要同级目录下有这些文件：
+
+```
+趋势雷达/
+├── trendradar          ← 编译出来的二进制
+├── frequency_words.txt ← 关键词列表（必须）
+├── ai_interests.txt    ← AI 兴趣描述（启用 AI 过滤时需要）
+├── ai_analysis_prompt.txt ← AI 分析提示词（启用 AI 分析时需要）
+├── ai_translation_prompt.txt
+├── config/
+│   ├── config.yaml     ← 主配置文件（必须）
+│   ├── timeline.yaml   ← 调度模板（启用 schedule 时需要）
+│   └── ai_filter/      ← AI 筛选提示词
+└── data/               ← 自动生成（数据库）
+```
+
+> **启动时可以通过 `--config` 指定配置文件的路径，程序会自动切换到配置文件所在的目录作为工作目录。** 比如 `./trendradar --config /opt/trendradar/config/config.yaml`，程序就会在 `/opt/trendradar/` 这个目录下找 `frequency_words.txt`、`timeline.yaml` 等配置文件。
+
+> 以上所需文件都在仓库的 `config/` 目录下，部署时一起拷贝即可。参见 [第 6 章](#6-部署到-linux-服务器) 的打包步骤。
+
 ---
 
 ## 2. 配置（只改 3 处即可上线）
