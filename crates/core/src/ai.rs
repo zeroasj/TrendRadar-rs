@@ -199,6 +199,41 @@ impl AiClient {
         })
     }
 
+    pub async fn chat_json_with_retry<T: serde::de::DeserializeOwned>(
+        &self,
+        messages: &[ChatMessage],
+        max_retries: usize,
+    ) -> Result<T> {
+        let mut last_err = String::new();
+        for attempt in 0..=max_retries {
+            if attempt > 0 {
+                let wait = 2u64.pow(attempt as u32);
+                tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+            }
+            let response = match self.chat(messages).await {
+                Ok(r) => r,
+                Err(e) => {
+                    last_err = format!("{}", e);
+                    continue;
+                }
+            };
+            if response.trim().is_empty() || response.trim() == "," {
+                last_err = format!("AI 返回空内容 (尝试 {}/{})", attempt, max_retries);
+                continue;
+            }
+            let cleaned = extract_json_from_response(&response);
+            match serde_json::from_str::<T>(&cleaned) {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    last_err = format!("JSON 解析失败 (尝试 {}/{}): {} 原始: {}...",
+                        attempt, max_retries, e,
+                        &response[..response.len().min(200)]);
+                }
+            }
+        }
+        Err(TrendRadarError::Ai(last_err))
+    }
+
     pub async fn validate(&self) -> Result<()> {
         if self.model.is_empty() {
             return Err(TrendRadarError::Ai(
@@ -528,7 +563,7 @@ impl AiFilter {
             model: settings.model.clone().or_else(|| global_ai.and_then(|g| g.model.clone())),
             api_key: settings.api_key.clone().or_else(|| global_ai.and_then(|g| g.api_key.clone())),
             api_base: settings.api_base.clone().or_else(|| global_ai.and_then(|g| g.api_base.clone())),
-            max_tokens: Some(global_ai.and_then(|g| g.max_tokens).unwrap_or(4096)),
+            max_tokens: Some(global_ai.and_then(|g| g.max_tokens).unwrap_or(8192)),
             temperature: Some(0.3),
             timeout: Some(global_ai.and_then(|g| g.timeout).unwrap_or(120)),
         };
@@ -608,56 +643,167 @@ impl AiFilter {
         &self,
         tags: &[AIFilterTag],
         titles: &[(i64, String)],
-    ) -> Result<Vec<AIFilterClassification>> {
+    ) -> Vec<AIFilterClassification> {
         if titles.is_empty() {
-            return Ok(Vec::new());
+            return Vec::new();
         }
 
+        let mut all_results = Vec::new();
+        let chunk_size = 80usize;
+
+        for chunk in titles.chunks(chunk_size) {
+            let chunk_results = self.classify_one_chunk(tags, chunk, chunk_size).await;
+            all_results.extend(chunk_results);
+            if chunk.len() == chunk_size {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        }
+
+        all_results
+    }
+
+    async fn classify_one_chunk(
+        &self,
+        tags: &[AIFilterTag],
+        chunk: &[(i64, String)],
+        _initial_size: usize,
+    ) -> Vec<AIFilterClassification> {
+        let chunk_ids: Vec<i64> = chunk.iter().map(|(id, _)| *id).collect();
         let tags_text: String = tags
             .iter()
             .map(|t| format!("ID:{} - {} ({})", t.id, t.name, t.keywords.join(", ")))
             .collect::<Vec<_>>()
             .join("\n");
+        let titles_text: String = chunk
+            .iter()
+            .map(|(id, title)| format!("ID:{} - {}", id, title))
+            .collect::<Vec<_>>()
+            .join("\n");
 
-        // 每批最多 80 条，防 AI 偷懒
-        const CHUNK_SIZE: usize = 80;
-        let mut all_results = Vec::new();
+        let prompt = format!(
+            "{}\n\n标签列表:\n{}\n\n新闻:\n{}\n\n为每条新闻匹配最合适的标签。输出格式:\nID|TAG_ID|SCORE\n每行一条，例如:\n1|3|0.95\n2|5|0.80\n未匹配的新闻不要输出。",
+            self.classify_prompt.1, tags_text, titles_text
+        );
+        let messages = vec![
+            ChatMessage::system(&self.classify_prompt.0),
+            ChatMessage::user(&prompt),
+        ];
 
-        for chunk in titles.chunks(CHUNK_SIZE) {
-            let titles_text: String = chunk
-                .iter()
-                .map(|(id, title)| format!("ID:{} - {}", id, title))
-                .collect::<Vec<_>>()
-                .join("\n");
+        // 第 1-2 次尝试：AI 分类
+        for attempt in 0..3u32 {
+            if attempt > 0 {
+                let wait = 2u64.pow(attempt);
+                tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+            }
 
-            let messages = vec![
-                ChatMessage::system(&self.classify_prompt.0),
-                ChatMessage::user(&format!(
-                    "{}\n\n标签列表:\n{}\n\n新闻:\n{}\n\n必须输出纯 JSON，格式: {{\"results\":[{{\"id\":1,\"tag_id\":2,\"score\":0.9}}]}}",
-                    self.classify_prompt.1, tags_text, titles_text
-                )),
-            ];
+            let response = match self.client.chat(&messages).await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("AI 分类请求失败 (尝试 {}): {}", attempt, e);
+                    continue;
+                }
+            };
 
-            let response: ClassificationResponse = self.client.chat_json(&messages).await?;
-            for item in response.results {
-                match item {
-                    ClassificationItem::Flat { id, tag_id, score } => {
-                        all_results.push(AIFilterClassification { news_id: id, tag_id, score });
-                    }
-                    ClassificationItem::Nested { id, tags } => {
-                        if let Some(best) = tags.into_iter().max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal)) {
-                            all_results.push(AIFilterClassification { news_id: id, tag_id: best.tag_id, score: best.score });
+            if response.trim().is_empty() {
+                tracing::warn!("AI 返回空响应 (尝试 {})", attempt);
+                continue;
+            }
+
+            // 尝试多层解析
+            if let Some(results) = parse_classification_response(&response, &chunk_ids, tags) {
+                return results;
+            }
+            tracing::warn!("AI 分类解析失败 (尝试 {}): {}...", attempt, &response[..response.len().min(100)]);
+        }
+
+        // 第 3 级兜底：关键词匹配，100% 可靠
+        tracing::warn!("AI 分类全部失败，使用关键词匹配兜底 {} 条", chunk.len());
+        keyword_fallback(chunk, tags)
+    }
+}
+
+fn parse_classification_response(
+    response: &str,
+    valid_ids: &[i64],
+    tags: &[AIFilterTag],
+) -> Option<Vec<AIFilterClassification>> {
+    let id_set: std::collections::HashSet<i64> = valid_ids.iter().copied().collect();
+    let tag_id_set: std::collections::HashSet<i64> = tags.iter().map(|t| t.id).collect();
+
+    // 策略 A：JSON 解析
+    let cleaned = extract_json_from_response(response);
+    if let Ok(parsed) = serde_json::from_str::<ClassificationResponse>(&cleaned) {
+        let results: Vec<_> = parsed.results.into_iter().filter_map(|item| {
+            let (news_id, tag_id, score) = match item {
+                ClassificationItem::Flat { id, tag_id, score } => (id, tag_id, score),
+                ClassificationItem::Nested { id, tags } => {
+                    let best = tags.into_iter().max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal))?;
+                    (id, best.tag_id, best.score)
+                }
+            };
+            if id_set.contains(&news_id) && tag_id_set.contains(&tag_id) {
+                Some(AIFilterClassification { news_id, tag_id, score: score.clamp(0.0, 1.0) })
+            } else {
+                None
+            }
+        }).collect();
+        if !results.is_empty() {
+            return Some(results);
+        }
+    }
+
+    // 策略 B：逐行 pipe 解析
+    let line_results: Vec<_> = response.lines().filter_map(|line| {
+        let parts: Vec<&str> = line.trim().split('|').collect();
+        if parts.len() != 3 { return None; }
+        let id: i64 = parts[0].trim().parse().ok()?;
+        let tag_id: i64 = parts[1].trim().parse().ok()?;
+        let score: f64 = parts[2].trim().parse().ok()?;
+        if id_set.contains(&id) && tag_id_set.contains(&tag_id) {
+            Some(AIFilterClassification { news_id: id, tag_id, score: score.clamp(0.0, 1.0) })
+        } else {
+            None
+        }
+    }).collect();
+    if !line_results.is_empty() {
+        return Some(line_results);
+    }
+
+    None
+}
+
+fn keyword_fallback(
+    chunk: &[(i64, String)],
+    tags: &[AIFilterTag],
+) -> Vec<AIFilterClassification> {
+    chunk.iter().filter_map(|(id, title)| {
+        let title_lower = title.to_lowercase();
+        let mut best: Option<(i64, f64, usize)> = None;
+        for tag in tags {
+            let mut matches = 0usize;
+            for kw in &tag.keywords {
+                if title_lower.contains(&kw.to_lowercase()) {
+                    matches += 1;
+                }
+            }
+            if matches > 0 {
+                let score = (matches as f64 / tag.keywords.len().max(1) as f64).clamp(0.0, 1.0);
+                match &best {
+                    None => best = Some((tag.id, score, matches)),
+                    Some((_, prev_score, prev_matches)) => {
+                        if score > *prev_score || (score == *prev_score && matches > *prev_matches) {
+                            best = Some((tag.id, score, matches));
                         }
                     }
                 }
             }
-            if chunk.len() == CHUNK_SIZE {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            }
         }
-
-        Ok(all_results)
-    }
+        best.map(|(tag_id, score, _)| AIFilterClassification {
+            news_id: *id,
+            tag_id,
+            score,
+        })
+    }).collect()
 }
 
 // ============================================================================

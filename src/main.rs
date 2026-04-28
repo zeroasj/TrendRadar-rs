@@ -464,7 +464,7 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
         if !once {
             let due = scheduler.get_due_periods().await;
             if due.is_empty() {
-                tokio::time::sleep(Duration::from_secs(30)).await;
+                tokio::time::sleep(Duration::from_secs(600)).await;
                 continue;
             }
 
@@ -515,6 +515,45 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
             "RSS 爬取完成: {} 条",
             rss_data.items.len()
         );
+
+        // 3. 先快速入库检测是否有新内容（仅持续模式需要此优化）
+        let mut total_new_items: usize = 0;
+        if !once {
+            let mut platform_groups_raw: std::collections::HashMap<String, Vec<&NewsItem>> =
+                std::collections::HashMap::new();
+            for item in &all_news {
+                platform_groups_raw
+                    .entry(item.platform.clone())
+                    .or_default()
+                    .push(item);
+            }
+            for (pid, items) in &platform_groups_raw {
+                let items_vec: Vec<NewsItem> = items.iter().map(|&i| i.clone()).collect();
+                if let Ok((new_count, _)) = storage.upsert_news_items(pid, pid, &items_vec) {
+                    total_new_items += new_count;
+                }
+            }
+            let mut feed_groups_raw: std::collections::HashMap<String, Vec<&RssItem>> =
+                std::collections::HashMap::new();
+            for item in &rss_data.items {
+                let key = item.feed_name.clone();
+                feed_groups_raw.entry(key).or_default().push(item);
+            }
+            for (feed_name, items) in &feed_groups_raw {
+                let items_vec: Vec<RssItem> = items.iter().map(|&i| i.clone()).collect();
+                if let Ok((new_count, _)) = storage.upsert_rss_items(feed_name, feed_name, &items_vec) {
+                    total_new_items += new_count;
+                }
+            }
+            if total_new_items == 0 {
+                let elapsed = Local::now().signed_duration_since(start_time).num_seconds();
+                tracing::info!("无新增内容，跳过 AI 筛选和推送");
+                tracing::info!("本轮完成，耗时 {}s", elapsed);
+                tokio::time::sleep(Duration::from_secs(600)).await;
+                continue;
+            }
+            tracing::info!("检测到 {} 条新增内容，开始处理", total_new_items);
+        }
 
         // 3. 关键词匹配
         let filter_method = config.filter.as_ref()
@@ -584,10 +623,9 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
                                     tracing::info!("AI 分类 {} 条新新闻 (共 {} 条)", new_news.len(), all_news.len());
                                     let new_titles: Vec<(i64, String)> = new_news.iter()
                                         .map(|(i, n)| ((*i + 1) as i64, n.title.clone())).collect();
-                                    match filter.classify_batch(&tags, &new_titles).await {
-                                        Ok(class_results) => {
-                                            for class in &class_results {
-                                                if class.score >= min_score {
+                                    let class_results = filter.classify_batch(&tags, &new_titles).await;
+                                    for class in &class_results {
+                                        if class.score >= min_score {
                                                     if let Some(idx) = (class.news_id as usize).checked_sub(1) {
                                                         if let Some(item) = all_news.get(idx) {
                                                             let mut item = item.clone();
@@ -606,11 +644,6 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
                                                 }
                                             }
                                             tracing::info!("AI 筛选新增 {} 条 (阈值: {})", class_results.len(), min_score);
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!("AI 分类失败: {}, 已分析新闻使用缓存标签", e);
-                                        }
-                                    }
                                 }
 
                                 tracing::info!("AI 筛选结果: {} 条 (含 {} 条缓存)", classified.len(), cached_count);
@@ -915,7 +948,7 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
             break;
         }
 
-        tokio::time::sleep(Duration::from_secs(30)).await;
+        tokio::time::sleep(Duration::from_secs(600)).await;
     }
 
     Ok(())

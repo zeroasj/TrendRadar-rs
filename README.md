@@ -44,11 +44,32 @@
   │
   ├── 1. 抓取 11 个热榜平台的最新热搜（微博/百度/知乎/B站/抖音/头条...）
   ├── 2. 抓取你订阅的 RSS 源（博客/新闻网站...）
-  ├── 3. 按关键词过滤（比如只要"AI""科技""股票"相关）
+  ├── 3. 按关键词过滤 + AI 智能分类（多层容错，始终有结果）
   ├── 4. 发给 AI 做深度分析（趋势判断/舆情分析/投资信号）
   ├── 5. 生成漂亮的 HTML 网页报告 + Markdown
   └── 6. 推送到你手机（飞书/钉钉/企业微信/Telegram/邮件/Bark/ntfy...）
 ```
+
+### 两种运行模式
+
+| 模式 | 命令 | 适用场景 |
+|------|------|---------|
+| **一次性**（推荐） | `./trendradar --config config/config.yaml --once` | crond 定时触发，跑完退出 |
+| **持续运行** | `./trendradar --config config/config.yaml` | systemd 守护，每 10 分钟爬取 |
+
+> 持续运行模式：每 10 分钟爬一次热榜，**只有出现新新闻才调用 AI 和推送**，无新增则静默跳过。适合全天盯盘的场景。
+
+### AI 筛选容错机制
+
+AI 分类内置三级降级保障，确保始终有结果输出：
+
+```
+第 1 级：JSON 解析 → 成功 ✅
+第 2 级：逐行 pipe 解析（ID|TAG|SCORE）→ 成功 ✅
+第 3 级：frequency_words.txt 关键词匹配兜底 → 100% 可靠 ✅
+```
+
+> 每级失败自动重试 3 次（指数退避 1s/2s/4s），一个 chunk 失败不影响其他 chunk。
 
 ### 和原版 Python 的区别
 
@@ -129,24 +150,31 @@ cargo build --release
 
 ### 1.2 交叉编译到其他平台
 
-如果要部署到 MIPS 路由器，需要在 x86 电脑上**交叉编译**。
+如果要部署到 MIPS 路由器（如小米 4A），需要在 x86 电脑上**交叉编译**。
 
-**推荐方式：使用 Docker（最简单）**
+**推荐方式：使用 Docker**
 
 ```bash
-# 编译 MIPS 版本（适用于 OpenWrt 路由器）
+# 编译 MIPS 版本（适用于 OpenWrt / 小米路由器）
+# 首次编译：下载工具链 150-200MB，需等待几分钟；之后增量编译仅数十秒
 docker run --rm \
   -v "$(pwd):/app" \
   -v cargo-cache:/root/.cargo \
+  -v rustup-cache:/root/.rustup \
   -w /app \
   messense/rust-musl-cross:mipsel-musl \
-  sh -c "rustup toolchain install nightly-2026-04-20 --profile minimal --component rust-src && \
+  sh -c "rustup component add rust-src --toolchain nightly-2026-04-20 && \
          CC=mipsel-unknown-linux-musl-gcc \
-         RUSTFLAGS='-C target-cpu=mips32r2' \
+         CFLAGS_mipsel_unknown_linux_musl='-march=mips32 -msoft-float' \
+         RUSTFLAGS='-C target-cpu=mips32' \
          cargo +nightly-2026-04-20 build -Zbuild-std --target mipsel-unknown-linux-musl --release"
 
 # 产物: target/mipsel-unknown-linux-musl/release/trendradar
 ```
+
+> **关键：** `CFLAGS_mipsel_unknown_linux_musl` 控制 SQLite 的 C 代码编译指令集，必须和 `RUSTFLAGS` 一致（都用 `mips32` 以兼容软浮点 CPU）。
+
+> **注意：** 不要使用 UPX 压缩——虽然能砍到 2.7MB（77%），但 UPX 在 MIPS musl 上不兼容，会导致进程启动失败。
 
 编译其他架构只需换 Docker 镜像标签，参考 [rust-musl-cross](https://github.com/messense/rust-musl-cross) 项目。
 
@@ -157,18 +185,19 @@ docker run --rm \
 ```
 趋势雷达/
 ├── trendradar          ← 编译出来的二进制
-├── frequency_words.txt ← 关键词列表（必须）
-├── ai_interests.txt    ← AI 兴趣描述（启用 AI 过滤时需要）
-├── ai_analysis_prompt.txt ← AI 分析提示词（启用 AI 分析时需要）
+├── .env                ← 环境变量（API Key、邮箱密码等）
+├── frequency_words.txt ← 关键词列表
+├── ai_interests.txt    ← AI 兴趣描述
+├── ai_analysis_prompt.txt
 ├── ai_translation_prompt.txt
 ├── config/
-│   ├── config.yaml     ← 主配置文件（必须）
-│   ├── timeline.yaml   ← 调度模板（启用 schedule 时需要）
+│   ├── config.yaml     ← 主配置文件
+│   ├── timeline.yaml   ← 调度模板
 │   └── ai_filter/      ← AI 筛选提示词
-└── data/               ← 自动生成（数据库）
+└── data/               ← 自动生成（数据库，可通过 storage.data_dir 配置到其他位置）
 ```
 
-> **启动时可以通过 `--config` 指定配置文件的路径，程序会自动切换到配置文件所在的目录作为工作目录。** 比如 `./trendradar --config /opt/trendradar/config/config.yaml`，程序就会在 `/opt/trendradar/` 这个目录下找 `frequency_words.txt`、`timeline.yaml` 等配置文件。
+> **启动时可以通过 `--config` 指定配置文件的路径，程序会自动切换到配置文件所在的目录作为工作目录。** 比如 `./trendradar --config /opt/trendradar/config/config.yaml`，程序就会在 `/opt/trendradar/` 这个目录下找配置和数据文件。
 
 > 以上所需文件都在仓库的 `config/` 目录下，部署时一起拷贝即可。参见 [第 6 章](#6-部署到-linux-服务器) 的打包步骤。
 
@@ -572,89 +601,97 @@ sudo systemctl status trendradar
 
 ## 7. 部署到 OpenWrt / 小米4A 路由器
 
-> 实测：小米 4A 千兆版路由器（MIPS 32-bit，16MB Flash，128MB RAM）稳定运行，内存峰值 ~12MB。
+> 实测：小米 4A 千兆版路由器（MIPS 32-bit，16MB Flash，128MB RAM，OpenWrt 25.12）稳定运行，内存峰值 ~12MB，二进制 ~11MB。
 
-### 7.1 交叉编译（Docker 方式，推荐）
+### 7.1 交叉编译
 
-在电脑上：
+见 [1.2 节](#12-交叉编译到其他平台) 的命令。编译完成后：
 
 ```bash
-docker run --rm \
-  -v "$(pwd):/app" \
-  -v cargo-cache:/root/.cargo \
-  -w /app \
-  messense/rust-musl-cross:mipsel-musl \
-  sh -c "rustup toolchain install nightly-2026-04-20 --profile minimal --component rust-src && \
-         CC=mipsel-unknown-linux-musl-gcc \
-         RUSTFLAGS='-C target-cpu=mips32r2' \
-         cargo +nightly-2026-04-20 build -Zbuild-std --target mipsel-unknown-linux-musl --release"
-
-# 产物
 cp target/mipsel-unknown-linux-musl/release/trendradar deploy/
 ```
 
-### 7.2 传到路由器
+### 7.2 部署到路由器
 
 ```bash
+# 上传整个 deploy 目录（含 config、frequency_words.txt 等）
 scp -O -r deploy root@192.168.1.1:/root/trendradar
 ```
 
-### 7.3 在路由器上配置
+### 7.3 首次配置
 
 ```bash
 # SSH 进入路由器
 ssh root@192.168.1.1
 
-# 创建 .env（存放密钥）
+# 修复 MIPS 软浮点链接器兼容（首次部署必须，写入 rc.local 开机自动恢复）
+ln -s /lib/ld-musl-mipsel-sf.so.1 /lib/ld-musl-mipsel.so.1
+echo "ln -s /lib/ld-musl-mipsel-sf.so.1 /lib/ld-musl-mipsel.so.1" >> /etc/rc.local
+
+# 设置时区（OpenWrt 默认 UTC，日志显示 UTC 时间）
+echo 'export TZ="CST-8"' >> /etc/profile
+
+# 创建 .env
 cd /root/trendradar
 cat > .env << 'EOF'
 AI_API_KEY=sk-your-key-here
 SMTP_PASSWORD=your-smtp-password
 EOF
 
-# 测试
-/root/trendradar/trendradar --config /root/trendradar/config/config.yaml --doctor
-
-# 试运行一次
+# 试运行
 /root/trendradar/trendradar --config /root/trendradar/config/config.yaml --once
 ```
 
-### 7.4 用 crond 定时触发（推荐）
-
-比持续运行更省资源：
+### 7.4 定时任务（crontab）
 
 ```bash
-# 编辑 crontab
-crontab -e
+# 每 4 小时执行一次（分钟偏移 3，避免整点冲突）
+echo "3 */4 * * * /root/trendradar/trendradar --config /root/trendradar/config/config.yaml --once >> /tmp/trendradar.log 2>&1" | crontab -
 
-# 添加定时任务（每 4 小时执行一次）
-0 */4 * * * /root/trendradar/trendradar --config /root/trendradar/config/config.yaml --once
-
-# 重启 crond
-/usr/sbin/crond restart
+# 验证
+crontab -l
 ```
 
-### 7.5 常见特殊处理
+> `--once` 表示执行一轮后退出。不加 `--once` 会进入持续运行的调度循环模式（适合 systemd 部署，不适合 crond）。
 
-**MIPS 软浮点链接器兼容：**
+### 7.5 存储空间管理
 
-如果提示 `not found`，检查动态链接器：
+小米 4A 的 overlay 分区仅 6.7MB。如果空间紧张：
+
+**方案一：数据库放到 tmpfs**
+
+编辑 `config/config.yaml`，在 `storage` 段加一行：
+```yaml
+storage:
+  backend: "auto"
+  data_dir: "/tmp/trendradar-data"    # 大 58MB，重启后自动重建
+```
+
+> 重启后数据库丢失，程序自动建新库从头采集。
+
+**方案二：挂载局域网存储**
 
 ```bash
-strings /root/trendradar/trendradar | grep ld-musl
-# 如果输出 /lib/ld-musl-mipsel.so.1
-
-ls /lib/ld-*
-# 实际可能是 /lib/ld-musl-mipsel-sf.so.1（软浮点版本）
-
-# 创建软链接
-ln -s /lib/ld-musl-mipsel-sf.so.1 /lib/ld-musl-mipsel.so.1
-
-# 写入开机自启
-echo "ln -s /lib/ld-musl-mipsel-sf.so.1 /lib/ld-musl-mipsel.so.1" >> /etc/rc.local
+# 挂载 NAS/PC 共享目录
+mkdir -p /mnt/nas
+mount -t nfs 192.168.1.xx:/share /mnt/nas
 ```
 
+然后设 `data_dir: "/mnt/nas"`，数据库永久保存在 NAS 上。
+
+### 7.6 更新二进制
+
+以后改了代码，只需要重新交叉编译并上传二进制（配置不变）：
+
+```bash
+# 在电脑上编译
+docker run --rm -v "d:\.../trendradar-rs:/app" ... cargo build ...
+
+# 上传并替换
+scp -O deploy/trendradar root@192.168.1.1:/root/trendradar/
+```
 ---
+
 
 ## 8. MCP Server 模式
 

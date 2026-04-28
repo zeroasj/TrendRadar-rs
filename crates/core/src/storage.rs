@@ -59,7 +59,13 @@ impl StorageManager {
                 "PRAGMA journal_mode=WAL;
                  PRAGMA synchronous=NORMAL;
                  PRAGMA foreign_keys=ON;"
-            ).map_err(|e| TrendRadarError::Storage(format!("pragma: {}", e)))?;
+            ).or_else(|_| {
+                conn.execute_batch(
+                    "PRAGMA journal_mode=DELETE;
+                     PRAGMA synchronous=NORMAL;
+                     PRAGMA foreign_keys=ON;"
+                )
+            }).map_err(|e| TrendRadarError::Storage(format!("pragma: {}", e)))?;
             *guard = Some(conn);
         }
         Ok(guard)

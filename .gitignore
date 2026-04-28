@@ -26,3 +26,4 @@ deploy/config/config.yaml
 # OS
 .DS_Store
 Thumbs.db
+docker 
