@@ -532,22 +532,6 @@ pub struct AIFilterClassification {
     pub score: f64,
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(untagged)]
-enum ClassificationItem {
-    Flat { id: i64, tag_id: i64, score: f64 },
-    Nested { id: i64, tags: Vec<ClassificationNestedTag> },
-}
-#[derive(Deserialize, Debug)]
-struct ClassificationNestedTag {
-    tag_id: i64,
-    score: f64,
-}
-#[derive(Deserialize)]
-struct ClassificationResponse {
-    results: Vec<ClassificationItem>,
-}
-
 pub struct AiFilter {
     client: AiClient,
     extract_prompt: (String, String),
@@ -731,31 +715,7 @@ fn parse_classification_response(
     let id_set: std::collections::HashSet<i64> = valid_ids.iter().copied().collect();
     let tag_id_set: std::collections::HashSet<i64> = tags.iter().map(|t| t.id).collect();
 
-    // 策略 A：JSON 解析
-    let cleaned = extract_json_from_response(response);
-    if let Ok(parsed) = serde_json::from_str::<ClassificationResponse>(&cleaned) {
-        let results: Vec<_> = parsed.results.into_iter().filter_map(|item| {
-            let (news_id, tag_id, score) = match item {
-                ClassificationItem::Flat { id, tag_id, score } => (id, tag_id, score),
-                ClassificationItem::Nested { id, tags } => {
-                    let best = tags.into_iter().max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal))?;
-                    (id, best.tag_id, best.score)
-                }
-            };
-            if id_set.contains(&news_id) && tag_id_set.contains(&tag_id) {
-                Some(AIFilterClassification { news_id, tag_id, score: score.clamp(0.0, 1.0) })
-            } else {
-                None
-            }
-        }).collect();
-        if !results.is_empty() {
-            tracing::info!("AI 分类 → JSON 解析成功，匹配 {} 条", results.len());
-            return Some(results);
-        }
-    }
-
-    // 策略 B：逐行 pipe 解析
-    let line_results: Vec<_> = response.lines().filter_map(|line| {
+    let results: Vec<_> = response.lines().filter_map(|line| {
         let parts: Vec<&str> = line.trim().split('|').collect();
         if parts.len() != 3 { return None; }
         let id: i64 = parts[0].trim().parse().ok()?;
@@ -767,9 +727,9 @@ fn parse_classification_response(
             None
         }
     }).collect();
-    if !line_results.is_empty() {
-        tracing::info!("AI 分类 → 逐行 pipe 解析成功，匹配 {} 条", line_results.len());
-        return Some(line_results);
+    if !results.is_empty() {
+        tracing::info!("AI 分类成功，匹配 {} 条", results.len());
+        return Some(results);
     }
 
     None
