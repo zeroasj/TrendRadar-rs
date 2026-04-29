@@ -12,12 +12,9 @@
 # ===============================================================
 app:
   # 时区配置（影响所有时间显示、调度系统判断、数据存储）
-  # 常用时区：
-  #   - Asia/Shanghai (北京时间 UTC+8)
-  #   - America/New_York (美东时间 UTC-5/-4)
-  #   - Europe/London (伦敦时间 UTC+0/+1)
-  # 完整时区列表: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
-  timezone: "Asia/Shanghai"
+  # musl/嵌入式环境建议用 POSIX 格式（如 CST-8），而非 IANA 名称（如 Asia/Shanghai）
+  # 常用值：CST-8（北京时间）、EST5EDT（美东）、GMT0（伦敦）
+  timezone: "CST-8"
   show_version_update: true           # 显示版本更新提示
 
 

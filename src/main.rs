@@ -108,6 +108,11 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    if let Some(ref tz) = config.app.timezone {
+        std::env::set_var("TZ", tz);
+        tracing::info!("时区已设置为: {}", tz);
+    }
+
     // 未配置调度时间段但开启了调度时，注入默认 period（每小时触发一次）
     let schedule_empty = config.schedule.as_ref().map(|s| s.periods.is_empty()).unwrap_or(true);
     let schedule_enabled = config.schedule.as_ref().and_then(|s| s.enabled).unwrap_or(false);
