@@ -35,7 +35,8 @@ struct Cli {
         short,
         long,
         default_value = "config/config.yaml",
-        help = "配置文件路径"
+        help = "配置文件路径",
+        global = true
     )]
     config: String,
 
