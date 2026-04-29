@@ -75,14 +75,18 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
+    // 在初始化日志之前先读 config 中的时区并设置环境变量
+    // 这样 tracing subscriber 和 chrono 都能用正确的时区
+    preload_timezone(&cli.config);
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
-
-    let cli = Cli::parse();
 
     let config_dir = std::path::Path::new(&cli.config)
         .parent()
@@ -107,11 +111,6 @@ async fn main() -> anyhow::Result<()> {
             return Err(anyhow::anyhow!("配置加载失败: {}", e));
         }
     };
-
-    if let Some(ref tz) = config.app.timezone {
-        std::env::set_var("TZ", tz);
-        tracing::info!("时区已设置为: {}", tz);
-    }
 
     // 未配置调度时间段但开启了调度时，注入默认 period（每小时触发一次）
     let schedule_empty = config.schedule.as_ref().map(|s| s.periods.is_empty()).unwrap_or(true);
@@ -297,6 +296,16 @@ fn load_dotenv() {
                 if !key.is_empty() {
                     std::env::set_var(key, val);
                 }
+            }
+        }
+    }
+}
+
+fn preload_timezone(config_path: &str) {
+    if let Ok(contents) = std::fs::read_to_string(config_path) {
+        if let Ok(root) = serde_yaml::from_str::<serde_yaml::Value>(&contents) {
+            if let Some(tz) = root.get("app").and_then(|a| a.get("timezone")).and_then(|v| v.as_str()) {
+                std::env::set_var("TZ", tz);
             }
         }
     }
