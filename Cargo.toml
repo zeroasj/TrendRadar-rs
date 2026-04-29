@@ -33,7 +33,7 @@ askama = "0.12"
 lettre = { version = "0.11", default-features = false, features = ["builder", "rustls-tls", "smtp-transport", "tokio1", "tokio1-rustls"] }
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "local-time"] }
 anyhow = "1"
 thiserror = "2"
 url = "2"

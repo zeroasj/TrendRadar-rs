@@ -3,6 +3,7 @@ use chrono::Local;
 use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tracing_subscriber::fmt::time::LocalTime;
 use std::time::Duration;
 use trendradar_core::ai::{AiAnalyzer, AiClient, AiFilter, AiTranslator};
 use trendradar_core::config::AppConfig;
@@ -82,6 +83,7 @@ async fn main() -> anyhow::Result<()> {
     preload_timezone(&cli.config);
 
     tracing_subscriber::fmt()
+        .with_timer(LocalTime::rfc_3339())
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
