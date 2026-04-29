@@ -717,8 +717,9 @@ impl AiFilter {
         }
 
         // 第 3 级兜底：关键词匹配，100% 可靠
-        tracing::warn!("AI 分类全部失败，使用关键词匹配兜底 {} 条", chunk.len());
-        keyword_fallback(chunk, tags)
+        let fallback = keyword_fallback(chunk, tags);
+        tracing::info!("AI 分类 → 关键词兜底匹配 {} 条", fallback.len());
+        fallback
     }
 }
 
@@ -748,6 +749,7 @@ fn parse_classification_response(
             }
         }).collect();
         if !results.is_empty() {
+            tracing::info!("AI 分类 → JSON 解析成功，匹配 {} 条", results.len());
             return Some(results);
         }
     }
@@ -766,6 +768,7 @@ fn parse_classification_response(
         }
     }).collect();
     if !line_results.is_empty() {
+        tracing::info!("AI 分类 → 逐行 pipe 解析成功，匹配 {} 条", line_results.len());
         return Some(line_results);
     }
 
