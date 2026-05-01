@@ -958,7 +958,6 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
             }
             Err(e) => tracing::warn!("清理过期数据失败: {}", e),
         }
-        let _ = storage.vacuum();
 
         let elapsed = Local::now()
             .signed_duration_since(start_time)
@@ -972,6 +971,9 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
 
         tokio::time::sleep(Duration::from_secs(600)).await;
     }
+
+    // 程序退出前回收数据库空间（仅 --once 退出时触发，持续模式每月约一次）
+    let _ = storage.vacuum();
 
     Ok(())
 }

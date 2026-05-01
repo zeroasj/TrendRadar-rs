@@ -653,7 +653,7 @@ async fn h_get_trending_topics(state: &AppState, args: &serde_json::Value) -> Re
     for item in &data.items {
         total += 1;
         let mut added = false;
-        for word in item.title.split(|c: char| !c.is_alphanumeric() && c != '\'') {
+        for word in item.title.split(|c: char| !c.is_alphanumeric() && !c.is_alphabetic() && c != '\'') {
             let w = word.trim();
             if w.len() >= 2 && !w.chars().all(|c| c.is_ascii_digit()) { *freq.entry(w.to_string()).or_default() += 1; added = true; }
         }
@@ -762,18 +762,17 @@ async fn h_search_news(state: &AppState, args: &serde_json::Value) -> Result<ser
     let include_url = args.get("include_url").and_then(|v| v.as_bool()).unwrap_or(false);
     let days = parse_date_days(args, 7);
     let since = chrono::Utc::now() - chrono::Duration::days(days);
-    let data = state.storage.query_news(None, Some(limit * 2), Some(since)).map_err(|e| e.to_string())?;
-    let q = query.to_lowercase();
-    let results: Vec<serde_json::Value> = data.items.iter().filter(|item| item.title.to_lowercase().contains(&q)).take(limit)
-        .map(|item| {
-            let mut j = serde_json::json!({"title":item.title,"platform":item.platform,"platform_name":item.platform_name,"rank":item.rank,"date":item.crawl_time.format("%Y-%m-%d").to_string()});
-            if include_url { if let Some(ref u) = item.url { j["url"] = serde_json::json!(u); } }
-            j
-        }).collect();
+    let data = state.storage.search_news_by_title(query, limit, Some(since)).map_err(|e| e.to_string())?;
+    let results: Vec<serde_json::Value> = data.items.iter().map(|item| {
+        let mut j = serde_json::json!({"title":item.title,"platform":item.platform,"platform_name":item.platform_name,"rank":item.rank,"date":item.crawl_time.format("%Y-%m-%d").to_string()});
+        if include_url { if let Some(ref u) = item.url { j["url"] = serde_json::json!(u); } }
+        j
+    }).collect();
     let mut resp = serde_json::json!({"success":true,"summary":{"total_found":results.len(),"returned":results.len(),"query":query,"search_mode":"keyword"},"data":results});
     if include_rss {
         let rss_limit = args.get("rss_limit").and_then(|v| v.as_u64()).unwrap_or(20).min(100) as usize;
         let rss_data = state.storage.query_rss(None, Some(rss_limit), Some(since)).map_err(|e| e.to_string())?;
+        let q = query.to_lowercase();
         let rss: Vec<serde_json::Value> = rss_data.items.iter().filter(|i| i.title.to_lowercase().contains(&q)).take(rss_limit)
             .map(|i| serde_json::json!({"title":i.title,"feed_name":i.feed_name,"link":i.link})).collect();
         resp["rss"] = serde_json::json!(rss);
@@ -826,11 +825,8 @@ async fn h_get_storage_status(state: &AppState) -> Result<serde_json::Value, Str
 
 async fn h_list_available_dates(state: &AppState, args: &serde_json::Value) -> Result<serde_json::Value, String> {
     let _source = args.get("source").and_then(|v| v.as_str()).unwrap_or("both");
-    let data = state.storage.query_news(None, Some(5000), None).map_err(|e| e.to_string())?;
-    let mut dates: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for item in &data.items { dates.insert(item.crawl_time.format("%Y-%m-%d").to_string()); }
-    let dl: Vec<String> = dates.into_iter().collect();
-    Ok(serde_json::json!({"success":true,"local":{"dates":dl,"count":dl.len()},"remote":{"dates":[],"count":0,"message":"远程存储未配置"}}))
+    let dates = state.storage.list_available_dates().map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({"success":true,"local":{"dates":dates,"count":dates.len()},"remote":{"dates":[],"count":0,"message":"远程存储未配置"}}))
 }
 
 // ============================================================================
@@ -1074,8 +1070,8 @@ async fn h_compare_periods(state: &AppState, args: &serde_json::Value) -> Result
         }
     };
     let (s1,e1) = parse(p1)?; let (s2,e2) = parse(p2)?;
-    let d1 = state.storage.query_news_by_date(&s1).map_err(|e| e.to_string())?;
-    let d2 = state.storage.query_news_by_date(&s2).map_err(|e| e.to_string())?;
+    let d1 = state.storage.query_news_by_date_range(&s1, &e1).map_err(|e| e.to_string())?;
+    let d2 = state.storage.query_news_by_date_range(&s2, &e2).map_err(|e| e.to_string())?;
     let t = topic.map(|s| s.to_lowercase());
     let c1 = d1.items.iter().filter(|i| t.as_ref().map_or(true, |t| i.title.to_lowercase().contains(t))).count();
     let c2 = d2.items.iter().filter(|i| t.as_ref().map_or(true, |t| i.title.to_lowercase().contains(t))).count();

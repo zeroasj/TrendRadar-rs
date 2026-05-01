@@ -78,6 +78,36 @@ impl StorageManager {
             .map_err(|e| TrendRadarError::Storage(format!("init schema: {}", e)))?;
         Ok(())
     }
+
+    fn map_news_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NewsItem> {
+        let url: Option<String> = row.get(0).unwrap_or(None);
+        let title: String = row.get(1)?;
+        let platform: String = row.get(2)?;
+        let platform_name: Option<String> = row.get(3).unwrap_or(None);
+        let rank: Option<i32> = row.get(4).unwrap_or(None);
+        let hot_score: Option<f64> = row.get(5).unwrap_or(None);
+        let summary: Option<String> = row.get(6).unwrap_or(None);
+        let author: Option<String> = row.get(7).unwrap_or(None);
+        let publish_time_str: Option<String> = row.get(8).unwrap_or(None);
+        let crawl_time_str: String = row.get(9)?;
+        let category: Option<String> = row.get(10).unwrap_or(None);
+        let is_new_int: i32 = row.get(11).unwrap_or(0);
+
+        let publish_time = publish_time_str
+            .and_then(|s| chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S").ok())
+            .map(|naive| DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc));
+
+        let crawl_time = chrono::NaiveDateTime::parse_from_str(&crawl_time_str, "%Y-%m-%d %H:%M:%S")
+            .map(|naive| DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc))
+            .unwrap_or_else(|_| Utc::now());
+
+        Ok(NewsItem {
+            url, title, platform, platform_name, rank, hot_score,
+            summary, author, publish_time, crawl_time, category,
+            keywords: vec![], is_new: Some(is_new_int == 1),
+            rank_change: None, title_changed: None, appearance_count: 0, id: None,
+        })
+    }
 }
 
 impl StorageManager {
@@ -345,6 +375,63 @@ impl StorageManager {
 
         let total = items.len();
         Ok(NewsData { items, total, crawl_time: Utc::now() })
+    }
+
+    pub fn query_news_by_date_range(&self, start: &str, end: &str) -> Result<NewsData> {
+        let guard = self.connect()?;
+        let conn = guard.as_ref().unwrap();
+        let sql = "SELECT n.url, n.title, p.id as platform, p.display_name, n.rank, n.hot_score, n.summary, n.author, n.publish_time, n.crawl_time, n.category, n.is_new \
+                   FROM news_items n JOIN platforms p ON n.platform_id = p.id \
+                   WHERE date(n.crawl_time) >= ?1 AND date(n.crawl_time) <= ?2 ORDER BY n.crawl_time DESC, n.rank ASC";
+        let mut stmt = conn.prepare(sql).map_err(|e| TrendRadarError::Storage(e.to_string()))?;
+        let items = stmt.query_map(params![start, end], |row| {
+            Self::map_news_row(row)
+        }).map_err(|e| TrendRadarError::Storage(e.to_string()))?
+        .filter_map(|r| r.ok())
+        .collect::<Vec<_>>();
+        let total = items.len();
+        Ok(NewsData { items, total, crawl_time: Utc::now() })
+    }
+
+    pub fn search_news_by_title(&self, query: &str, limit: usize, since: Option<DateTime<Utc>>) -> Result<NewsData> {
+        let guard = self.connect()?;
+        let conn = guard.as_ref().unwrap();
+        let mut sql = String::from(
+            "SELECT n.url, n.title, p.id as platform, p.display_name, n.rank, n.hot_score, n.summary, n.author, n.publish_time, n.crawl_time, n.category, n.is_new \
+             FROM news_items n JOIN platforms p ON n.platform_id = p.id WHERE n.title LIKE ?1"
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let pattern = format!("%{}%", query);
+        param_values.push(Box::new(pattern));
+        if let Some(since_time) = since {
+            sql.push_str(" AND n.crawl_time >= ?2");
+            param_values.push(Box::new(since_time.format("%Y-%m-%d %H:%M:%S").to_string()));
+        }
+        sql.push_str(" ORDER BY n.crawl_time DESC, n.rank ASC");
+        sql.push_str(&format!(" LIMIT {}", limit));
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = conn.prepare(&sql).map_err(|e| TrendRadarError::Storage(e.to_string()))?;
+        let items = stmt.query_map(params_ref.as_slice(), |row| {
+            Self::map_news_row(row)
+        }).map_err(|e| TrendRadarError::Storage(e.to_string()))?
+        .filter_map(|r| r.ok())
+        .collect::<Vec<_>>();
+        let total = items.len();
+        Ok(NewsData { items, total, crawl_time: Utc::now() })
+    }
+
+    pub fn list_available_dates(&self) -> Result<Vec<String>> {
+        let guard = self.connect()?;
+        let conn = guard.as_ref().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT date(crawl_time) FROM news_items ORDER BY date(crawl_time) DESC"
+        ).map_err(|e| TrendRadarError::Storage(e.to_string()))?;
+        let dates = stmt.query_map(params![], |row| {
+            Ok(row.get::<_, String>(0)?)
+        }).map_err(|e| TrendRadarError::Storage(e.to_string()))?
+        .filter_map(|r| r.ok())
+        .collect();
+        Ok(dates)
     }
 
     pub fn get_rank_history(&self, news_id: i64) -> Result<Vec<(i32, Option<f64>, String)>> {
