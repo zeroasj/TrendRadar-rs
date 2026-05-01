@@ -633,14 +633,14 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
                                 let min_score = cfg.min_score.unwrap_or(0.7);
                                 let mut classified: Vec<NewsItem> = Vec::new();
 
-                                // 生成 AI 缓存键：有 URL 用 URL，无 URL 用 title+platform
-                                fn ai_cache_key(item: &NewsItem) -> String {
+                                // AI 缓存键：有 URL 用 URL，无 URL 用 title+platform（同标题同来源共用缓存，省 token）
+                            fn ai_cache_key(item: &NewsItem) -> String {
                                 if let Some(ref url) = item.url {
                                     if !url.is_empty() {
                                         return url.clone();
                                     }
                                 }
-                                format!("{}#{}#{}", item.title, item.platform, item.crawl_time.format("%Y-%m-%d %H:%M:%S"))
+                                format!("{}#{}", item.title, item.platform)
                             }
 
                                 // 跳过已分析过的新闻（省 token，原版特性）

@@ -144,10 +144,9 @@ impl TimelineScheduler {
 
         for &hour in &run_hours {
             let minute = period.run_minutes.as_ref()
-                .and_then(|m| m.iter().find(|&&mm| mm / 60 == 0).copied())
+                .and_then(|m| m.iter().find(|&&mm| mm < 60).copied())
                 .unwrap_or(0);
-            // 在 [分钟, 分钟+1] 窗口内均视为命中，避免调度器几秒延迟导致漏触发
-            // 注意：主循环轮询间隔应与此窗口匹配（入口 main.rs 中的 sleep 时长）
+            // 在 [分钟, 分钟+1] 窗口内均视为命中，主循环 60s 轮询确保不遗漏
             if current_hour == hour && current_minute >= minute && current_minute <= minute + 1 {
                 return true;
             }
@@ -220,8 +219,12 @@ impl TimelineScheduler {
         };
 
         let current_hour = current.hour();
+        let current_minute = current.minute();
         for &hour in &run_hours {
-            if current_hour == hour && current.minute() < 2 {
+            let minute = period.run_minutes.as_ref()
+                .and_then(|m| m.iter().find(|&&mm| mm < 60).copied())
+                .unwrap_or(0);
+            if current_hour == hour && current_minute >= minute && current_minute <= minute + 1 {
                 return true;
             }
         }

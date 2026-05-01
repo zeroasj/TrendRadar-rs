@@ -150,6 +150,9 @@ pub struct RssFeed {
     pub title: Option<String>,
     pub description: Option<String>,
     pub url: String,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    pub max_age_days: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -87,11 +87,9 @@ impl DataFetcher {
                 }
             }
 
-            // 指数退避重试公式：base(3s) + jitter(0~2s) + linear_growth(attempt * 1.3s)
+            // 指数退避重试公式：3s + attempt*2s（单调递增）
             if attempt < max_retries {
-                let base_wait: f64 = 3.0 + (attempt as f64 * 0.7) % 2.0;
-                let extra_wait: f64 = attempt as f64 * 1.3;
-                let wait_time = base_wait + extra_wait;
+                let wait_time = 3.0 + attempt as f64 * 2.0;
                 tracing::info!("{:.2}秒后重试...", wait_time);
                 tokio::time::sleep(Duration::from_secs_f64(wait_time)).await;
             }
@@ -243,8 +241,8 @@ impl RssFetcher {
                 name: f.name.clone().unwrap_or_else(|| f.url.clone()),
                 url: f.url.clone(),
                 max_items: 0,
-                enabled: true,
-                max_age_days: None,
+                enabled: f.enabled,
+                max_age_days: f.max_age_days,
             }).collect()
         }).unwrap_or_default();
 
@@ -409,10 +407,11 @@ impl RssFetcher {
         let mut all_items: Vec<RssItem> = Vec::new();
         let mut failed_ids = Vec::new();
         let total = self.feeds.len();
+        let enabled_count = self.feeds.iter().filter(|f| f.enabled).count();
 
-        tracing::info!("[RSS] 开始抓取 {} 个 RSS 源...", total);
+        tracing::info!("[RSS] 开始抓取 {}/{} 个已启用 RSS 源...", enabled_count, total);
 
-        for (i, feed) in self.feeds.iter().enumerate() {
+        for (i, feed) in self.feeds.iter().filter(|f| f.enabled).enumerate() {
             if i > 0 {
                 let jitter: f64 = ((i as f64 * 0.13) % 0.4) - 0.2;
                 let interval = (self.request_interval_ms as f64 / 1000.0) + jitter * (self.request_interval_ms as f64 / 1000.0);
