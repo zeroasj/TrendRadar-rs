@@ -36,9 +36,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "local-time"] }
 anyhow = "1"
 thiserror = "2"
-url = "2"
-cron = "0.15"
-rand = "0.9"
 
 [dependencies]
 trendradar-core = { path = "crates/core" }
