@@ -688,7 +688,7 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
                                                                 let _ = storage.mark_news_ai_analyzed(
                                                                     &key);
                                                             }
-                                                            if !classified.iter().any(|c: &NewsItem| c.url == item.url) {
+                                                            if !classified.iter().any(|c: &NewsItem| ai_cache_key(c) == ai_cache_key(&item)) {
                                                                 classified.push(item);
                                                             }
                                                         }

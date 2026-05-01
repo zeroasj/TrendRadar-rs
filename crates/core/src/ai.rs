@@ -155,7 +155,12 @@ impl AiClient {
         })?;
 
         let status = resp.status();
-        let resp_text = resp.text().await.unwrap_or_default();
+        let resp_text = match resp.text().await {
+            Ok(t) => t,
+            Err(e) => {
+                return Err(TrendRadarError::Ai(format!("HTTP body read failed: {}", e)));
+            }
+        };
 
         if !status.is_success() {
             return Err(TrendRadarError::Ai(format!(
@@ -636,11 +641,14 @@ impl AiFilter {
 
         let mut all_results = Vec::new();
 
-        for chunk in titles.chunks(self.batch_size) {
+        let total_chunks = (titles.len() + self.batch_size - 1) / self.batch_size;
+        for (chunk_idx, chunk) in titles.chunks(self.batch_size).enumerate() {
+            tracing::info!("AI 分类 chunk {}/{} ({} 条)", chunk_idx + 1, total_chunks, chunk.len());
             let chunk_results = self.classify_one_chunk(tags, chunk, self.batch_size).await;
+            tracing::info!("AI 分类 chunk {}/{} 匹配 {} 条", chunk_idx + 1, total_chunks, chunk_results.len());
             all_results.extend(chunk_results);
             if chunk.len() == self.batch_size {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
         }
 
@@ -666,7 +674,7 @@ impl AiFilter {
             .join("\n");
 
         let prompt = format!(
-            "{}\n\n标签列表:\n{}\n\n新闻:\n{}\n\n为每条新闻匹配最合适的标签。输出格式:\nID|TAG_ID|SCORE\n每行一条，例如:\n1|3|0.95\n2|5|0.80\n未匹配的新闻不要输出。",
+            "{}\n\n标签列表:\n{}\n\n新闻:\n{}\n\n为每条新闻匹配最合适的标签。输出格式:\nID|TAG_ID|SCORE\n每行一条，例如:\n1|3|0.95\n2|5|0.80\n未匹配的新闻不要输出。\n如果整个列表没有一条新闻能匹配任何标签，只输出一行 NONE。",
             self.classify_prompt.1, tags_text, titles_text
         );
         let messages = vec![
@@ -690,9 +698,11 @@ impl AiFilter {
             };
 
             if response.trim().is_empty() {
-                tracing::warn!("AI 返回空响应 (尝试 {})", attempt);
+                tracing::warn!("AI 分类返回空响应 (尝试 {})", attempt);
                 continue;
             }
+
+            tracing::debug!("AI 分类原始响应前200字: {}", &response[..response.len().min(200)]);
 
             // 尝试多层解析
             if let Some(results) = parse_classification_response(&response, &chunk_ids, tags) {
@@ -713,6 +723,11 @@ fn parse_classification_response(
     valid_ids: &[i64],
     tags: &[AIFilterTag],
 ) -> Option<Vec<AIFilterClassification>> {
+    let first_line = response.lines().next().map(|l| l.trim()).unwrap_or("");
+    if first_line.eq_ignore_ascii_case("NONE") || first_line.eq_ignore_ascii_case("无匹配") {
+        return Some(Vec::new());
+    }
+
     let id_set: std::collections::HashSet<i64> = valid_ids.iter().copied().collect();
     let tag_id_set: std::collections::HashSet<i64> = tags.iter().map(|t| t.id).collect();
 

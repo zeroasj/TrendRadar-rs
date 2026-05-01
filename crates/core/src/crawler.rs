@@ -192,7 +192,6 @@ pub struct RssFetcher {
     client: reqwest::Client,
     feeds: Vec<RssFeedConfig>,
     request_interval_ms: u64,
-    timeout_secs: u64,
     freshness_enabled: bool,
     default_max_age_days: i64,
 }
@@ -224,7 +223,6 @@ impl RssFetcher {
             client,
             feeds: feeds.into_iter().filter(|f| f.enabled).collect(),
             request_interval_ms,
-            timeout_secs,
             freshness_enabled,
             default_max_age_days,
         })
