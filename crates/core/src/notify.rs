@@ -733,7 +733,7 @@ pub async fn send_to_ntfy(
             log_prefix, batch_num, total_batches, report_type
         );
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-        let retry_headers: Vec<(&str, String)> = if total_batches > 1 {
+        let mut retry_headers: Vec<(&str, String)> = if total_batches > 1 {
             vec![
                 ("Content-Type", "text/plain; charset=utf-8".to_string()),
                 ("Markdown", "yes".to_string()),
@@ -750,6 +750,9 @@ pub async fn send_to_ntfy(
                 ("Tags", "news".to_string()),
             ]
         };
+        if let Some(ref token) = config.token {
+            retry_headers.push(("Authorization", format!("Bearer {}", token)));
+        }
         let retry_resp = http_post_body(&client, &url, content.to_string(), retry_headers).await?;
         if retry_resp.status().as_u16() == 200 {
             println!(

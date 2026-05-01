@@ -726,10 +726,14 @@ async fn h_get_rss_feeds_status(state: &AppState) -> Result<serde_json::Value, S
 // ============================================================================
 
 async fn h_get_news_by_date(state: &AppState, args: &serde_json::Value) -> Result<serde_json::Value, String> {
-    let target = resolve_date_arg(args.get("date_range"));
+    let (target, has_range) = resolve_date_arg(args.get("date_range"));
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50).min(1000) as usize;
     let include_url = args.get("include_url").and_then(|v| v.as_bool()).unwrap_or(false);
-    let data = state.storage.query_news_by_date(&target).map_err(|e| e.to_string())?;
+    let data = if let Some(end) = has_range {
+        state.storage.query_news_by_date_range(&target, &end).map_err(|e| e.to_string())?
+    } else {
+        state.storage.query_news_by_date(&target).map_err(|e| e.to_string())?
+    };
     let items: Vec<serde_json::Value> = data.items.iter().take(limit).map(|item| {
         let mut j = serde_json::json!({"title":item.title,"platform":item.platform,"platform_name":item.platform_name,"rank":item.rank,"date":item.crawl_time.format("%Y-%m-%d").to_string()});
         if include_url { if let Some(ref u) = item.url { j["url"] = serde_json::json!(u); } }
@@ -738,15 +742,22 @@ async fn h_get_news_by_date(state: &AppState, args: &serde_json::Value) -> Resul
     Ok(serde_json::json!({"success":true,"date":target,"total":items.len(),"data":items}))
 }
 
-fn resolve_date_arg(v: Option<&serde_json::Value>) -> String {
+fn resolve_date_arg(v: Option<&serde_json::Value>) -> (String, Option<String>) {
     let now = chrono::Local::now();
     match v.and_then(|v| v.as_str()) {
-        Some("today"|"今天") => now.format("%Y-%m-%d").to_string(),
-        Some("yesterday"|"昨天") => (now - chrono::Duration::days(1)).format("%Y-%m-%d").to_string(),
-        Some(s) => s.to_string(),
-        None => match v.and_then(|v| v.get("start")).and_then(|v| v.as_str()) {
-            Some(s) => s.to_string(),
-            None => now.format("%Y-%m-%d").to_string(),
+        Some("today"|"今天") => (now.format("%Y-%m-%d").to_string(), None),
+        Some("yesterday"|"昨天") => ((now - chrono::Duration::days(1)).format("%Y-%m-%d").to_string(), None),
+        Some(s) => (s.to_string(), None),
+        None => match v.and_then(|v| v.get("end")).and_then(|v| v.as_str()) {
+            Some(end) => {
+                let start = v.and_then(|v| v.get("start")).and_then(|v| v.as_str())
+                    .unwrap_or(now.format("%Y-%m-%d").to_string().as_str()).to_string();
+                (start, Some(end.to_string()))
+            }
+            None => match v.and_then(|v| v.get("start")).and_then(|v| v.as_str()) {
+                Some(s) => (s.to_string(), None),
+                None => (now.format("%Y-%m-%d").to_string(), None),
+            }
         }
     }
 }
@@ -1120,7 +1131,7 @@ async fn h_read_article(args: &serde_json::Value) -> Result<serde_json::Value, S
     match client.get(&jina_url).header("Accept","text/markdown").send().await {
         Ok(resp) => {
             let text = resp.text().await.map_err(|e| e.to_string())?;
-            let truncated = if text.len() > 10000 { text[..10000].to_string() } else { text };
+            let truncated = if text.chars().count() > 10000 { text.chars().take(10000).collect::<String>() } else { text };
             Ok(serde_json::json!({"success":true,"url":url,"content":truncated,"length":truncated.len()}))
         }
         Err(e) => Err(format!("读取失败: {}. 确认URL以http://或https://开头", e))
@@ -1139,7 +1150,7 @@ async fn h_read_articles_batch(args: &serde_json::Value) -> Result<serde_json::V
         let r = match client.get(&jina_url).header("Accept","text/markdown").send().await {
             Ok(resp) => {
                 let text = resp.text().await.map_err(|e| e.to_string())?;
-                serde_json::json!({"url":url,"status":"success","content":if text.len()>5000 {text[..5000].to_string()} else {text}})
+                serde_json::json!({"url":url,"status":"success","content":if text.chars().count()>5000 {text.chars().take(5000).collect::<String>()} else {text}})
             }
             Err(e) => serde_json::json!({"url":url,"status":"error","error":e.to_string()})
         };
@@ -1150,6 +1161,25 @@ async fn h_read_articles_batch(args: &serde_json::Value) -> Result<serde_json::V
 }
 
 fn parse_date_days(args: &serde_json::Value, default: i64) -> i64 {
+    // 优先解析自然语言表达式
+    if let Some(expr) = args.get("date_range").and_then(|v| v.as_str()) {
+        let now = chrono::Local::now();
+        return match expr.to_lowercase().as_str() {
+            "today" | "今天" => 1,
+            "yesterday" | "昨天" => 1,
+            "this_week" | "this week" | "本周" => (now.weekday().num_days_from_monday() as i64 + 1).max(1),
+            "last_week" | "上周" | "last week" => 7,
+            "this_month" | "本月" | "this month" => now.day() as i64,
+            "last_month" | "上月" | "last month" => 30,
+            _ => {
+                if let Some(n) = parse_natural_days(expr, "最近", "天") { n }
+                else if let Some(n) = parse_natural_days(expr, "last", "days") { n }
+                else if let Ok(d) = chrono::NaiveDate::parse_from_str(expr, "%Y-%m-%d") { (chrono::Utc::now().date_naive() - d).num_days().max(1) }
+                else { default }
+            }
+        };
+    }
+    // 后解析嵌套对象
     match args.get("date_range").and_then(|v| v.get("start")).and_then(|v| v.as_str()) {
         Some(s) => match chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
             Ok(d) => (chrono::Utc::now().date_naive() - d).num_days().max(1),
@@ -1157,4 +1187,11 @@ fn parse_date_days(args: &serde_json::Value, default: i64) -> i64 {
         }
         None => default,
     }
+}
+
+fn parse_natural_days(expr: &str, prefix: &str, suffix: &str) -> Option<i64> {
+    let l = expr.to_lowercase();
+    let p = l.find(&prefix.to_lowercase())?;
+    let s = l.rfind(&suffix.to_lowercase())?;
+    l[p+prefix.len()..s].trim().parse().ok()
 }

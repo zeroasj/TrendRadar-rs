@@ -147,6 +147,7 @@ impl TimelineScheduler {
                 .and_then(|m| m.iter().find(|&&mm| mm / 60 == 0).copied())
                 .unwrap_or(0);
             // 在 [分钟, 分钟+1] 窗口内均视为命中，避免调度器几秒延迟导致漏触发
+            // 注意：主循环轮询间隔应与此窗口匹配（入口 main.rs 中的 sleep 时长）
             if current_hour == hour && current_minute >= minute && current_minute <= minute + 1 {
                 return true;
             }

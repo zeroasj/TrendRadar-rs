@@ -481,7 +481,9 @@ impl AppConfig {
             if !pw.is_empty() {
                 if let Some(ref mut notification) = self.notification {
                     for email in &mut notification.channels.email {
-                        email.password = pw.clone();
+                        if email.password.is_empty() {
+                            email.password = pw.clone();
+                        }
                     }
                 }
             }

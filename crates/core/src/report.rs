@@ -26,6 +26,24 @@ pub struct ReportData {
     pub update_info: Option<UpdateInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ai_analysis: Option<AiAnalysisResult>,
+    pub rss_groups: Vec<RssGroup>,
+    pub rss_total: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RssGroup {
+    pub name: String,
+    pub count: usize,
+    pub items: Vec<RssDisplay>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RssDisplay {
+    pub title: String,
+    pub time_display: String,
+    pub source_name: String,
+    pub url: String,
+    pub is_new: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

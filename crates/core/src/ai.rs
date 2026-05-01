@@ -123,7 +123,7 @@ impl AiClient {
                 Ok(content) => return Ok(content),
                 Err(e) => {
                     last_error = format!("{}", e);
-                    println!("AI 模型 {} 请求失败: {}，尝试下一个...", model, last_error);
+                    tracing::warn!("AI 模型 {} 请求失败: {}，尝试下一个...", model, last_error);
                 }
             }
         }
@@ -538,6 +538,7 @@ pub struct AiFilter {
     classify_prompt: (String, String),
     #[allow(dead_code)]
     update_tags_prompt: (String, String),
+    batch_size: usize,
 }
 
 impl AiFilter {
@@ -585,6 +586,7 @@ impl AiFilter {
             extract_prompt,
             classify_prompt,
             update_tags_prompt,
+            batch_size: settings.batch_size.unwrap_or(80),
         })
     }
 
@@ -633,12 +635,11 @@ impl AiFilter {
         }
 
         let mut all_results = Vec::new();
-        let chunk_size = 80usize; // 单次 AI 请求最多分类条数，控制 token 消耗
 
-        for chunk in titles.chunks(chunk_size) {
-            let chunk_results = self.classify_one_chunk(tags, chunk, chunk_size).await;
+        for chunk in titles.chunks(self.batch_size) {
+            let chunk_results = self.classify_one_chunk(tags, chunk, self.batch_size).await;
             all_results.extend(chunk_results);
-            if chunk.len() == chunk_size {
+            if chunk.len() == self.batch_size {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
         }
@@ -673,7 +674,7 @@ impl AiFilter {
             ChatMessage::user(&prompt),
         ];
 
-        // 第 1-2 次尝试：AI 分类
+        // AI 分类重试（最多 3 次）
         for attempt in 0..3u32 {
             if attempt > 0 {
                 let wait = 2u64.pow(attempt);
@@ -1133,12 +1134,11 @@ pub fn render_ai_analysis_plain(result: &AiAnalysisResult) -> String {
 // 辅助函数
 // ============================================================================
 
+/// 基础 Markdown → HTML 转换（用于 email 内联展示，非完整实现）
 fn markdown_to_html(text: &str) -> String {
     let text = text.replace("\n\n", "</p><p>");
     let text = text.replace('\n', "<br>");
-
     let text = AI_BOLD_RE.replace_all(&text, "<strong>$1</strong>");
-
     let text = format!("<p>{}</p>", text);
     text.replace("<p></p>", "")
 }

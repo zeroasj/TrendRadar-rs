@@ -31,6 +31,35 @@ pub struct TemplateAiBlock {
 }
 
 #[derive(Clone)]
+pub struct TemplateStatItem {
+    pub word: String,
+    pub count: usize,
+    pub index: usize,
+    pub titles: Vec<TemplateTitleItem>,
+}
+
+#[derive(Clone)]
+pub struct TemplateSourceGroup {
+    pub source_name: String,
+    pub titles: Vec<TemplateTitleItem>,
+}
+
+#[derive(Clone)]
+pub struct TemplateTitleItem {
+    pub number: usize,
+    pub rank_text: String,
+    pub rank_class: String,
+    pub trend_arrow: String,
+    pub time_display: String,
+    pub title_count: usize,
+    pub source_name: String,
+    pub keyword: String,
+    pub title: String,
+    pub url: String,
+    pub is_new: bool,
+}
+
+#[derive(Clone)]
 pub struct TemplateRssGroup {
     pub name: String,
     pub count: usize,
@@ -40,39 +69,10 @@ pub struct TemplateRssGroup {
 #[derive(Clone)]
 pub struct TemplateRssItem {
     pub title: String,
-    pub url: String,
     pub time_display: String,
     pub source_name: String,
-    pub is_new: bool,
-}
-
-#[derive(Clone)]
-pub struct TemplateStatItem {
-    pub word: String,
-    pub count: usize,
-    pub index: usize,
-    pub titles: Vec<TemplateTitleItem>,
-}
-
-#[derive(Clone)]
-pub struct TemplateTitleItem {
-    pub title: String,
-    pub source_name: String,
-    pub time_display: String,
-    pub keyword: String,
-    pub rank_text: String,
-    pub rank_class: String,
-    pub trend_arrow: String,
     pub url: String,
     pub is_new: bool,
-    pub title_count: usize,
-    pub number: usize,
-}
-
-#[derive(Clone)]
-pub struct TemplateSourceGroup {
-    pub source_name: String,
-    pub titles: Vec<TemplateTitleItem>,
 }
 
 fn convert_title(
@@ -219,8 +219,20 @@ impl ReportTemplate {
             vec![]
         };
 
-        let rss_groups: Vec<TemplateRssGroup> = vec![];
-        let rss_total: usize = 0;
+        let rss_groups: Vec<TemplateRssGroup> = data.rss_groups.iter().map(|g| {
+            TemplateRssGroup {
+                name: g.name.clone(),
+                count: g.count,
+                items: g.items.iter().map(|i| TemplateRssItem {
+                    title: i.title.clone(),
+                    time_display: i.time_display.clone(),
+                    source_name: i.source_name.clone(),
+                    url: i.url.clone(),
+                    is_new: i.is_new,
+                }).collect(),
+            }
+        }).collect();
+        let rss_total: usize = data.rss_total;
 
         ReportTemplate {
             title: data.title.clone(),

@@ -22,6 +22,11 @@ const PLATFORM_IDS: &[(&str, &str)] = &[
     ("ithome", "IT之家"),
     ("sspai", "少数派"),
     ("juejin", "掘金"),
+    ("wallstreetcn-hot", "华尔街见闻"),
+    ("thepaper", "澎湃新闻"),
+    ("bilibili-hot-search", "B站热搜"),
+    ("cls-hot", "财联社"),
+    ("ifeng", "凤凰网"),
 ];
 
 pub struct DataFetcher {

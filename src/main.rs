@@ -13,7 +13,7 @@ use trendradar_core::model::{NewsItem, ReportMode, RssItem};
 use trendradar_core::notify::Notifier;
 use trendradar_core::report::{
     generate_markdown_report, generate_notification_content, generate_rss_report,
-    NewsDisplay, ReportData, ReportWriter, StatItem,
+    NewsDisplay, ReportData, ReportWriter, RssGroup, RssDisplay, StatItem,
 };
 use trendradar_core::scheduler::TimelineScheduler;
 use trendradar_core::templates::ReportTemplate;
@@ -332,14 +332,28 @@ fn load_ai_prompt(config: &trendradar_core::config::AiAnalysisSettings, _global_
             let mut user = String::new();
             let mut current_section = "";
             for line in content.lines() {
-                if line.trim() == "[system]" { current_section = "system"; continue; }
-                if line.trim() == "[user]" { current_section = "user"; continue; }
-                if !current_section.is_empty() {
-                    match current_section {
-                        "system" => { system.push_str(line); system.push('\n'); }
-                        "user" => { user.push_str(line); user.push('\n'); }
-                        _ => {}
+                let trimmed = line.trim();
+                if trimmed.eq_ignore_ascii_case("[system]") {
+                    current_section = "system";
+                    continue;
+                }
+                if trimmed.eq_ignore_ascii_case("[user]") {
+                    current_section = "user";
+                    continue;
+                }
+                if trimmed.is_empty() && current_section != "user" {
+                    continue;
+                }
+                match current_section {
+                    "system" => {
+                        if !system.is_empty() { system.push('\n'); }
+                        system.push_str(line);
                     }
+                    "user" => {
+                        if !user.is_empty() { user.push('\n'); }
+                        user.push_str(line);
+                    }
+                    _ => {}
                 }
             }
             let system = system.trim().to_string();
@@ -454,6 +468,10 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
         return Ok(());
     }
 
+    // 跟踪 once_analyze / once_push：记录已执行过的 period key
+    let mut once_analyze_done: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut once_push_done: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     let active_sources: Vec<(&str, &str)> = config
         .platforms
         .sources
@@ -486,7 +504,7 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
         if !once {
             let due = scheduler.get_due_periods().await;
             if due.is_empty() {
-                tokio::time::sleep(Duration::from_secs(600)).await;
+                tokio::time::sleep(Duration::from_secs(60)).await;
                 continue;
             }
 
@@ -571,7 +589,7 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
                 let elapsed = Local::now().signed_duration_since(start_time).num_seconds();
                 tracing::info!("无新增内容，跳过 AI 筛选和推送");
                 tracing::info!("本轮完成，耗时 {}s", elapsed);
-                tokio::time::sleep(Duration::from_secs(600)).await;
+                tokio::time::sleep(Duration::from_secs(120)).await;
                 continue;
             }
             tracing::info!("检测到 {} 条新增内容，开始处理", total_new_items);
@@ -615,10 +633,20 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
                                 let min_score = cfg.min_score.unwrap_or(0.7);
                                 let mut classified: Vec<NewsItem> = Vec::new();
 
+                                // 生成 AI 缓存键：有 URL 用 URL，无 URL 用 title+platform
+                                fn ai_cache_key(item: &NewsItem) -> String {
+                                if let Some(ref url) = item.url {
+                                    if !url.is_empty() {
+                                        return url.clone();
+                                    }
+                                }
+                                format!("{}#{}#{}", item.title, item.platform, item.crawl_time.format("%Y-%m-%d %H:%M:%S"))
+                            }
+
                                 // 跳过已分析过的新闻（省 token，原版特性）
                                 let new_news: Vec<(usize, &NewsItem)> = all_news.iter().enumerate()
                                     .filter(|(_, n)| {
-                                        !storage.is_news_analyzed_by_ai(n.url.as_deref().unwrap_or_default()).unwrap_or(false)
+                                        !storage.is_news_analyzed_by_ai(&ai_cache_key(n)).unwrap_or(false)
                                     })
                                     .collect();
                                 let cached_count = all_news.len() - new_news.len();
@@ -628,10 +656,11 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
 
                                 // 先恢复缓存中已有的标签
                                 for (_, item) in all_news.iter().enumerate() {
-                                    if storage.is_news_analyzed_by_ai(item.url.as_deref().unwrap_or_default()).unwrap_or(false) {
+                                    let key = ai_cache_key(item);
+                                    if storage.is_news_analyzed_by_ai(&key).unwrap_or(false) {
                                         let mut cached_item = item.clone();
                                         // 从数据库恢复标签
-                                        if let Ok(tags) = storage.get_ai_filter_results(item.url.as_deref().unwrap_or("")) {
+                                        if let Ok(tags) = storage.get_ai_filter_results(&key) {
                                             if let Some((t, _, _)) = tags.first() {
                                                 cached_item.keywords = vec![t.clone()];
                                             }
@@ -653,10 +682,11 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
                                                             let mut item = item.clone();
                                                             if let Some(tag) = tags.iter().find(|t| t.id == class.tag_id) {
                                                                 item.keywords = vec![tag.name.clone()];
+                                                                let key = ai_cache_key(&item);
                                                                 let _ = storage.insert_ai_filter_result(
-                                                                    item.url.as_deref().unwrap_or(""), &tag.name, Some(class.score), None);
+                                                                    &key, &tag.name, Some(class.score), None);
                                                                 let _ = storage.mark_news_ai_analyzed(
-                                                                        item.url.as_deref().unwrap_or(""));
+                                                                    &key);
                                                             }
                                                             if !classified.iter().any(|c: &NewsItem| c.url == item.url) {
                                                                 classified.push(item);
@@ -726,7 +756,14 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
 
         // 5. AI 分析 (如果已配置)
         let mut ai_analysis_result: Option<trendradar_core::ai::AiAnalysisResult> = None;
-        if resolved.analyze && ai_client.is_some() {
+        let skip_once_analyze = resolved.once_analyze
+            && resolved.period_key.as_ref().map_or(false, |k| once_analyze_done.contains(k));
+        if resolved.analyze && !skip_once_analyze && ai_client.is_some() {
+            if resolved.once_analyze {
+                if let Some(ref k) = resolved.period_key {
+                    once_analyze_done.insert(k.clone());
+                }
+            }
             let analysis_config = config.ai_analysis.as_ref();
             if analysis_config.map(|a| a.enabled.unwrap_or(false)).unwrap_or(false) {
                 tracing::info!("========== AI 深度分析 ==========");
@@ -871,6 +908,26 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
 
         let generation_time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
+        // RSS 按 feed 分组供报告模板使用
+        let mut rss_group_map: std::collections::BTreeMap<String, Vec<&RssItem>> = std::collections::BTreeMap::new();
+        for rss_item in &matched_rss {
+            rss_group_map.entry(rss_item.feed_name.clone()).or_default().push(rss_item);
+        }
+        let rss_groups: Vec<RssGroup> = rss_group_map.into_iter().map(|(name, items)| {
+            RssGroup {
+                name: name.clone(),
+                count: items.len(),
+                items: items.iter().map(|i| RssDisplay {
+                    title: i.title.clone(),
+                    time_display: i.publish_time.map(|t| t.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default(),
+                    source_name: i.author.clone().unwrap_or_default(),
+                    url: i.link.clone().unwrap_or_default(),
+                    is_new: i.title_changed,
+                }).collect(),
+            }
+        }).collect();
+        let rss_total: usize = matched_rss.len();
+
         let report_data = ReportData {
             title: format!("TrendRadar {}报告", mode_label),
             mode: mode_label.clone(),
@@ -882,6 +939,8 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
             total_items: matched_news.len(),
             update_info: None,
             ai_analysis: ai_analysis_result,
+            rss_groups,
+            rss_total,
         };
 
         // 7. 生成报告文件
@@ -910,7 +969,14 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
         tracing::info!("HTML 报告: {}", html_path);
 
         // 8. 发送通知
-        if resolved.push {
+        let skip_once_push = resolved.once_push
+            && resolved.period_key.as_ref().map_or(false, |k| once_push_done.contains(k));
+        if resolved.push && !skip_once_push {
+            if resolved.once_push {
+                if let Some(ref k) = resolved.period_key {
+                    once_push_done.insert(k.clone());
+                }
+            }
             if let Some(ref notifier) = notifier {
             tracing::info!("========== 通知推送 ==========");
             let notification_content = generate_notification_content(
@@ -969,7 +1035,7 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
             break;
         }
 
-        tokio::time::sleep(Duration::from_secs(600)).await;
+        tokio::time::sleep(Duration::from_secs(60)).await;
     }
 
     // 程序退出前回收数据库空间（仅 --once 退出时触发，持续模式每月约一次）
