@@ -192,11 +192,8 @@ pub struct RssFetcher {
     client: reqwest::Client,
     feeds: Vec<RssFeedConfig>,
     request_interval_ms: u64,
-    #[allow(dead_code)]
     timeout_secs: u64,
-    #[allow(dead_code)]
     freshness_enabled: bool,
-    #[allow(dead_code)]
     default_max_age_days: i64,
 }
 
@@ -252,8 +249,11 @@ impl RssFetcher {
         let timeout = config.advanced.as_ref()
             .and_then(|a| a.request_timeout)
             .unwrap_or(15);
+        let freshness = rss.and_then(|r| r.freshness_filter.as_ref());
+        let freshness_enabled = freshness.map(|f| f.enabled).unwrap_or(true);
+        let default_max_age_days = freshness.map(|f| f.max_age_days).unwrap_or(3);
 
-        Self::new(feeds, request_interval, timeout, true, 3)
+        Self::new(feeds, request_interval, timeout, freshness_enabled, default_max_age_days)
     }
 
     pub async fn fetch_feed(&self, feed: &RssFeedConfig) -> (Vec<RssItem>, Option<String>) {
@@ -263,8 +263,9 @@ impl RssFetcher {
                     Ok(body) => {
                         match self.parse_xml(&body, feed) {
                             Ok(items) => {
-                                tracing::info!("[RSS] {}: 获取 {} 条", feed.name, items.len());
-                                (items, None)
+                                let filtered = self.apply_freshness_filter(feed, items);
+                                tracing::info!("[RSS] {}: 获取 {} 条", feed.name, filtered.len());
+                                (filtered, None)
                             }
                             Err(e) => (vec![], Some(format!("解析失败: {}", e))),
                         }
@@ -274,6 +275,24 @@ impl RssFetcher {
             }
             Err(e) => (vec![], Some(format!("请求失败: {}", e))),
         }
+    }
+
+    fn apply_freshness_filter(&self, feed: &RssFeedConfig, items: Vec<RssItem>) -> Vec<RssItem> {
+        let max_age = feed.max_age_days
+            .filter(|&d| d >= 0)
+            .unwrap_or(self.default_max_age_days);
+        if !self.freshness_enabled || max_age == 0 {
+            return items;
+        }
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(max_age);
+        let before = items.len();
+        let filtered: Vec<RssItem> = items.into_iter()
+            .filter(|item| item.publish_time.map_or(true, |t| t >= cutoff))
+            .collect();
+        if filtered.len() < before {
+            tracing::info!("[RSS] {}: 新鲜度过滤 {}/{} 条 (max_age: {}d)", feed.name, filtered.len(), before, max_age);
+        }
+        filtered
     }
 
     fn parse_xml(&self, xml: &str, feed: &RssFeedConfig) -> Result<Vec<RssItem>> {

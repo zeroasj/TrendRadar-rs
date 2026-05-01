@@ -142,6 +142,14 @@ pub struct RssSettings {
     pub enabled: Option<bool>,
     #[serde(default)]
     pub feeds: Vec<RssFeed>,
+    #[serde(default)]
+    pub freshness_filter: Option<RssFreshnessFilter>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RssFreshnessFilter {
+    pub enabled: bool,
+    pub max_age_days: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
