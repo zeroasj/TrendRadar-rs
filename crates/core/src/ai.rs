@@ -198,8 +198,9 @@ impl AiClient {
         let cleaned = extract_json_from_response(&response);
         serde_json::from_str(&cleaned).map_err(|e| {
             TrendRadarError::Ai(format!(
-                "JSON 解析失败: {}\n原始响应: {}",
-                e, response
+                "JSON 解析失败: {}\n提取后长度: {}, 原始前300字: {}...",
+                e, cleaned.len(),
+                &response[..response.len().min(300)]
             ))
         })
     }
@@ -371,7 +372,7 @@ impl AiAnalyzer {
             model: settings.model.clone().or_else(|| global_ai.and_then(|g| g.model.clone())),
             api_key: settings.api_key.clone().or_else(|| global_ai.and_then(|g| g.api_key.clone())),
             api_base: settings.api_base.clone().or_else(|| global_ai.and_then(|g| g.api_base.clone())),
-            max_tokens: Some(global_ai.and_then(|g| g.max_tokens).unwrap_or(8192)),
+            max_tokens: Some(global_ai.and_then(|g| g.max_tokens).unwrap_or(16384)),
             temperature: Some(global_ai.and_then(|g| g.temperature).unwrap_or(0.7)),
             timeout: Some(global_ai.and_then(|g| g.timeout).unwrap_or(120)),
         };
@@ -406,17 +407,21 @@ impl AiAnalyzer {
             Ok(result) => Ok(result),
             Err(first_error) => {
                 tracing::warn!("AI 分析 JSON 解析失败，尝试 AI 修复: {}", first_error);
-                let raw_response = self.client.chat(&messages).await.ok();
-                if let Some(raw) = raw_response {
-                    match self.retry_fix_json(&raw).await {
-                        Some(fixed) => {
-                            tracing::info!("AI 修复 JSON 成功");
-                            Ok(fixed)
+                match self.client.chat(&messages).await {
+                    Ok(raw) => {
+                        tracing::info!("AI 分析原始响应（尾部200字）: ...{}", &raw[raw.len().saturating_sub(200)..]);
+                        match self.retry_fix_json(&raw).await {
+                            Some(fixed) => {
+                                tracing::info!("AI 修复 JSON 成功");
+                                Ok(fixed)
+                            }
+                            None => Err(first_error),
                         }
-                        None => Err(first_error),
                     }
-                } else {
-                    Err(first_error)
+                    Err(e) => {
+                        tracing::warn!("AI 分析重试获取原始响应也失败: {}", e);
+                        Err(first_error)
+                    }
                 }
             }
         }
