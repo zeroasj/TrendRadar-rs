@@ -297,8 +297,13 @@ fn load_dotenv() {
                 let val = trimmed[eq + 1..].trim();
                 let val = val.trim_matches('"').trim_matches('\'');
                 if !key.is_empty() {
+                // 只允许白名单前缀的环境变量，防止覆盖 PATH/LD_PRELOAD 等系统变量
+                if key.starts_with("AI_") || key.starts_with("SMTP_") || key.starts_with("TZ") {
                     std::env::set_var(key, val);
+                } else {
+                    tracing::warn!(".env 中跳过非白名单变量: {}", key);
                 }
+            }
             }
         }
     }

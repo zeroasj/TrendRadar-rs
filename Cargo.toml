@@ -37,9 +37,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "local-time"] 
 anyhow = "1"
 thiserror = "2"
 url = "2"
-uuid = { version = "1", features = ["v4"] }
-sha1 = "0.10"
-base64 = "0.22"
 cron = "0.15"
 rand = "0.9"
 

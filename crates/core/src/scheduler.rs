@@ -146,6 +146,7 @@ impl TimelineScheduler {
             let minute = period.run_minutes.as_ref()
                 .and_then(|m| m.iter().find(|&&mm| mm / 60 == 0).copied())
                 .unwrap_or(0);
+            // 在 [分钟, 分钟+1] 窗口内均视为命中，避免调度器几秒延迟导致漏触发
             if current_hour == hour && current_minute >= minute && current_minute <= minute + 1 {
                 return true;
             }

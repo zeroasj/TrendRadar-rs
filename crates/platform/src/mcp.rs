@@ -880,6 +880,7 @@ async fn h_send_notification(state: &AppState, args: &serde_json::Value) -> Resu
     let target = if channels.is_empty() { "all".to_string() } else { channels.join(",") };
     let config = state.config.clone();
     let content = format!("{}\n\n{}", title, msg);
+    // std::thread 而非 tokio::spawn：Notifier 内部 future 非 Send，需独立单线程 runtime
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
@@ -1098,16 +1099,10 @@ async fn h_trigger_crawl(state: &AppState, args: &serde_json::Value) -> Result<s
     if ids.is_empty() { return Err("No available platforms".to_string()); }
     let num_ids = ids.len();
     let config = state.config.clone();
-    let result = std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let fetcher = DataFetcher::new(None, None).map_err(|e| e.to_string())?;
-            let delay = config.advanced.as_ref().and_then(|a| a.request_delay).unwrap_or(2000);
-            let retries = config.advanced.as_ref().and_then(|a| a.max_retries).unwrap_or(2);
-            fetcher.fetch_all_platforms(&ids, delay, retries).await.map_err(|e| e.to_string())
-        })
-    }).join().map_err(|e| format!("Crawl thread panicked: {:?}", e))?;
-    let items = result?;
+    let delay = config.advanced.as_ref().and_then(|a| a.request_delay).unwrap_or(2000);
+    let retries = config.advanced.as_ref().and_then(|a| a.max_retries).unwrap_or(2);
+    let fetcher = DataFetcher::new(None, None).map_err(|e| e.to_string())?;
+    let items = fetcher.fetch_all_platforms(&ids, delay, retries).await.map_err(|e| e.to_string())?;
     let out: Vec<serde_json::Value> = items.iter().map(|i| {
         let mut j = serde_json::json!({"title":i.title,"platform":i.platform,"platform_name":i.platform_name,"rank":i.rank});
         if include_url { if let Some(ref u) = i.url { j["url"] = serde_json::json!(u); } }

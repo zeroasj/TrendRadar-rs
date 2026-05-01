@@ -633,7 +633,7 @@ impl AiFilter {
         }
 
         let mut all_results = Vec::new();
-        let chunk_size = 80usize;
+        let chunk_size = 80usize; // 单次 AI 请求最多分类条数，控制 token 消耗
 
         for chunk in titles.chunks(chunk_size) {
             let chunk_results = self.classify_one_chunk(tags, chunk, chunk_size).await;

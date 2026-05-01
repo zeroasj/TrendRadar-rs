@@ -82,6 +82,7 @@ impl DataFetcher {
                 }
             }
 
+            // 指数退避重试公式：base(3s) + jitter(0~2s) + linear_growth(attempt * 1.3s)
             if attempt < max_retries {
                 let base_wait: f64 = 3.0 + (attempt as f64 * 0.7) % 2.0;
                 let extra_wait: f64 = attempt as f64 * 1.3;

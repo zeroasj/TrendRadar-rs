@@ -421,6 +421,7 @@ fn xml_escape(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+/// 各通知渠道的消息体字节数上限（API 硬限制），超过则分批发送
 pub fn get_batch_size_for_channel(channel: &str) -> usize {
     match channel {
         "feishu" => 29000,
