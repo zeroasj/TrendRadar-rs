@@ -23,6 +23,10 @@
                 <span class="info-value">{{ generation_time }}</span>
             </div>
         </div>
+        <div class="view-toggle">
+            <button class="toggle-btn{% if default_view == "keyword" || default_view.is_empty() %} active{% endif %}" onclick="switchView('keyword')" id="btn-keyword">📋 按标签</button>
+            <button class="toggle-btn{% if default_view == "platform" %} active{% endif %}" onclick="switchView('platform')" id="btn-platform">📱 按平台</button>
+        </div>
     </div>
     <div class="content">
         {% if show_error %}
@@ -50,6 +54,7 @@
         </div>
         {% endif %}
         {% if show_stats %}
+        <div id="view-keyword" class="view-panel"{% if default_view == "platform" %} style="display:none"{% endif %}>
         {% for stat in stats %}
         <div class="word-group">
             <div class="word-header">
@@ -93,6 +98,49 @@
             {% endfor %}
         </div>
         {% endfor %}
+        </div>
+        <div id="view-platform" class="view-panel" style="display:none{% if default_view == "platform" %};display:block{% endif %}">
+        {% for stat in platform_stats %}
+        <div class="word-group">
+            <div class="word-header">
+                <div class="word-info">
+                    <div class="word-name">{{ stat.word }}</div>
+                    <div class="word-count{% if stat.count >= 10 %} hot{% else if stat.count >= 5 %} warm{% endif %}">{{ stat.count }} 条</div>
+                </div>
+                <div class="word-index">{{ stat.index }}/{{ platform_stats.len() }}</div>
+            </div>
+            {% for title in stat.titles %}
+            <div class="news-item{% if title.is_new %} new{% endif %}">
+                <div class="news-number">{{ title.number }}</div>
+                <div class="news-content">
+                    <div class="news-header">
+                        <span class="source-name">{{ title.keyword }}</span>
+                        {% if title.rank_text.len() > 0 %}
+                        <span class="rank-num{% if title.rank_class.len() > 0 %} {{ title.rank_class }}{% endif %}">{{ title.rank_text }}</span>
+                        {% endif %}
+                        {% if !title.trend_arrow.is_empty() %}
+                        <span class="trend-arrow">{{ title.trend_arrow }}</span>
+                        {% endif %}
+                        {% if !title.time_display.is_empty() %}
+                        <span class="time-info">{{ title.time_display }}</span>
+                        {% endif %}
+                        {% if title.title_count > 1 %}
+                        <span class="count-info">{{ title.title_count }}次</span>
+                        {% endif %}
+                    </div>
+                    <div class="news-title">
+                        {% if !title.url.is_empty() %}
+                        <a href="{{ title.url }}" target="_blank" class="news-link">{{ title.title }}</a>
+                        {% else %}
+                        {{ title.title }}
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+        </div>
         {% endif %}
         {% if show_new_section %}
         <div class="new-section">
@@ -167,4 +215,12 @@
         </div>
     </div>
 </div>
+<script>
+function switchView(view) {
+    document.getElementById('view-keyword').style.display = view === 'keyword' ? '' : 'none';
+    document.getElementById('view-platform').style.display = view === 'platform' ? '' : 'none';
+    document.getElementById('btn-keyword').className = 'toggle-btn' + (view === 'keyword' ? ' active' : '');
+    document.getElementById('btn-platform').className = 'toggle-btn' + (view === 'platform' ? ' active' : '');
+}
+</script>
 {% endblock %}

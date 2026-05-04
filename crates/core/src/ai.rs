@@ -42,7 +42,7 @@ pub struct AiClient {
     model: String,
     api_key: Option<String>,
     api_base: String,
-    max_tokens: u32,
+    max_tokens: Option<u32>,
     temperature: f64,
     timeout_secs: u64,
     fallback_models: Vec<String>,
@@ -90,7 +90,7 @@ impl AiClient {
             model: model_name,
             api_key: settings.api_key.clone(),
             api_base,
-            max_tokens: settings.max_tokens.unwrap_or(4096),
+            max_tokens: settings.max_tokens,
             temperature: settings.temperature.unwrap_or(0.7),
             timeout_secs,
             fallback_models: Vec::new(),
@@ -137,12 +137,14 @@ impl AiClient {
     async fn try_chat(&self, messages: &[ChatMessage], model: &str) -> Result<String> {
         let url = format!("{}/chat/completions", self.api_base.trim_end_matches('/'));
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": model,
             "messages": messages,
-            "max_tokens": self.max_tokens,
             "temperature": self.temperature,
         });
+        if let Some(mt) = self.max_tokens {
+            body["max_tokens"] = serde_json::json!(mt);
+        }
 
         let mut req = self.http_client.post(&url).json(&body);
 
@@ -200,7 +202,7 @@ impl AiClient {
             TrendRadarError::Ai(format!(
                 "JSON 解析失败: {}\n提取后长度: {}, 原始前300字: {}...",
                 e, cleaned.len(),
-                &response[..response.len().min(300)]
+                safe_prefix(&response, 300)
             ))
         })
     }
@@ -233,7 +235,7 @@ impl AiClient {
                 Err(e) => {
                     last_err = format!("JSON 解析失败 (尝试 {}/{}): {} 原始: {}...",
                         attempt, max_retries, e,
-                        &response[..response.len().min(200)]);
+                        safe_prefix(&response, 200));
                 }
             }
         }
@@ -252,6 +254,24 @@ impl AiClient {
             ));
         }
         Ok(())
+    }
+}
+
+fn safe_prefix(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((pos, _)) => &s[..pos],
+        None => s,
+    }
+}
+
+fn safe_suffix(s: &str, max_chars: usize) -> &str {
+    let total = s.chars().count();
+    if total <= max_chars {
+        return s;
+    }
+    match s.char_indices().nth(total - max_chars) {
+        Some((pos, _)) => &s[pos..],
+        None => s,
     }
 }
 
@@ -289,6 +309,8 @@ pub fn load_prompt_template(file_path: &str) -> Result<(String, String)> {
     let content = std::fs::read_to_string(file_path)
         .map_err(|e| TrendRadarError::Ai(format!("无法加载提示词文件 {}: {}", file_path, e)))?;
 
+    let content = content.trim_start_matches('\u{FEFF}');
+
     let mut system_prompt = String::new();
     let mut user_prompt = String::new();
     let mut current_section = "";
@@ -316,6 +338,14 @@ pub fn load_prompt_template(file_path: &str) -> Result<(String, String)> {
                 _ => {}
             }
         }
+    }
+
+    if system_prompt.is_empty() && user_prompt.is_empty() {
+        return Err(TrendRadarError::Ai(format!(
+            "提示词文件 {} 解析后system和user均为空 (文件长度: {} 字节, 前10字: {}...)",
+            file_path, content.len(),
+            safe_prefix(&content, 10)
+        )));
     }
 
     Ok((system_prompt, user_prompt))
@@ -372,7 +402,7 @@ impl AiAnalyzer {
             model: settings.model.clone().or_else(|| global_ai.and_then(|g| g.model.clone())),
             api_key: settings.api_key.clone().or_else(|| global_ai.and_then(|g| g.api_key.clone())),
             api_base: settings.api_base.clone().or_else(|| global_ai.and_then(|g| g.api_base.clone())),
-            max_tokens: Some(global_ai.and_then(|g| g.max_tokens).unwrap_or(16384)),
+            max_tokens: None,
             temperature: Some(global_ai.and_then(|g| g.temperature).unwrap_or(0.7)),
             timeout: Some(global_ai.and_then(|g| g.timeout).unwrap_or(120)),
         };
@@ -409,7 +439,7 @@ impl AiAnalyzer {
                 tracing::warn!("AI 分析 JSON 解析失败，尝试 AI 修复: {}", first_error);
                 match self.client.chat(&messages).await {
                     Ok(raw) => {
-                        tracing::info!("AI 分析原始响应（尾部200字）: ...{}", &raw[raw.len().saturating_sub(200)..]);
+                        tracing::info!("AI 分析原始响应（尾部200字）: ...{}", safe_suffix(&raw, 200));
                         match self.retry_fix_json(&raw).await {
                             Some(fixed) => {
                                 tracing::info!("AI 修复 JSON 成功");
@@ -546,7 +576,6 @@ pub struct AiFilter {
     client: AiClient,
     extract_prompt: (String, String),
     classify_prompt: (String, String),
-    #[allow(dead_code)]
     update_tags_prompt: (String, String),
     batch_size: usize,
 }
@@ -558,7 +587,7 @@ impl AiFilter {
             model: settings.model.clone().or_else(|| global_ai.and_then(|g| g.model.clone())),
             api_key: settings.api_key.clone().or_else(|| global_ai.and_then(|g| g.api_key.clone())),
             api_base: settings.api_base.clone().or_else(|| global_ai.and_then(|g| g.api_base.clone())),
-            max_tokens: Some(global_ai.and_then(|g| g.max_tokens).unwrap_or(8192)),
+            max_tokens: None,
             temperature: Some(0.3),
             timeout: Some(global_ai.and_then(|g| g.timeout).unwrap_or(120)),
         };
@@ -584,12 +613,16 @@ impl AiFilter {
             });
 
         let update_tags_prompt =
-            load_prompt_template(update_tags_prompt_path).unwrap_or_else(|_| {
-                (
-                    "你需要更新标签列表。".to_string(),
-                    "对比旧标签和新兴趣描述，给出更新方案。".to_string(),
-                )
-            });
+            match load_prompt_template(update_tags_prompt_path) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!("加载 update_tags_prompt 失败 ({}), 用内置默认: {}", update_tags_prompt_path, e);
+                    (
+                        "你是一个标签管理专家。对比旧标签集和新的兴趣描述，给出更新方案。直接处理数据，立即输出JSON。".to_string(),
+                        "## 当前标签集\n\n{old_tags_json}\n\n## 新的兴趣描述\n\n{interests_content}\n\n## 任务\n\n对比后输出JSON：\n```json\n{\n  \"keep\": [{\"tag\": \"标签名\", \"description\": \"描述\"}],\n  \"add\": [{\"tag\": \"标签名\", \"description\": \"描述\"}],\n  \"remove\": [\"要废弃的标签名\"],\n  \"change_ratio\": 0.2\n}\n```".to_string(),
+                    )
+                }
+            };
 
         Ok(AiFilter {
             client: AiClient::new(&ai_settings)?,
@@ -633,6 +666,80 @@ impl AiFilter {
                 parent_id: None,
             })
             .collect())
+    }
+
+    pub async fn update_tags(
+        &self,
+        old_tags: &[String],
+        interests_content: &str,
+    ) -> Result<Vec<AIFilterTag>> {
+        let old_tags_json = serde_json::to_string(old_tags).unwrap_or_else(|_| "[]".to_string());
+        let user_content = self.update_tags_prompt.1
+            .replace("{old_tags_json}", &old_tags_json)
+            .replace("{interests_content}", interests_content);
+        let messages = vec![
+            ChatMessage::system(&self.update_tags_prompt.0),
+            ChatMessage::user(&user_content),
+        ];
+
+        tracing::info!("update_tags: old_tags({})={}", old_tags.len(), safe_prefix(&old_tags_json, 80));
+        tracing::info!("update_tags: interests_len={}", interests_content.len());
+
+        #[derive(Deserialize)]
+        struct UpdateResponse {
+            keep: Vec<UpdateItem>,
+            add: Vec<UpdateItem>,
+            #[allow(dead_code)]
+            remove: Vec<String>,
+            #[allow(dead_code)]
+            change_ratio: f64,
+        }
+        #[derive(Deserialize)]
+        struct UpdateItem {
+            tag: String,
+            description: String,
+        }
+
+        let response: UpdateResponse = self.client.chat_json(&messages).await?;
+
+        let mut tags = Vec::new();
+        let mut next_id: i64 = 1;
+        for item in &response.keep {
+            tags.push(AIFilterTag {
+                id: next_id,
+                name: item.tag.clone(),
+                keywords: self.description_to_keywords(&item.description),
+                priority: next_id as i32,
+                parent_id: None,
+            });
+            next_id += 1;
+        }
+        for item in &response.add {
+            tags.push(AIFilterTag {
+                id: next_id,
+                name: item.tag.clone(),
+                keywords: self.description_to_keywords(&item.description),
+                priority: next_id as i32,
+                parent_id: None,
+            });
+            next_id += 1;
+        }
+
+        if !response.remove.is_empty() {
+            tracing::info!("AI 标签管理：移除 {} 个旧标签", response.remove.len());
+        }
+        if !response.add.is_empty() {
+            tracing::info!("AI 标签管理：新增 {} 个标签", response.add.len());
+        }
+
+        Ok(tags)
+    }
+
+    fn description_to_keywords(&self, desc: &str) -> Vec<String> {
+        desc.split(|c: char| c == '、' || c == '，' || c == ',' || c == '；' || c == ';')
+            .map(|s| s.trim().trim_matches('"').trim_matches('"').to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
     }
 
     pub async fn classify_batch(
@@ -707,13 +814,13 @@ impl AiFilter {
                 continue;
             }
 
-            tracing::debug!("AI 分类原始响应前200字: {}", &response[..response.len().min(200)]);
+            tracing::debug!("AI 分类原始响应前200字: {}", safe_prefix(&response, 200));
 
             // 尝试多层解析
             if let Some(results) = parse_classification_response(&response, &chunk_ids, tags) {
                 return results;
             }
-            tracing::warn!("AI 分类解析失败 (尝试 {}): {}...", attempt, &response[..response.len().min(100)]);
+            tracing::warn!("AI 分类解析失败 (尝试 {}): {}...", attempt, safe_prefix(&response, 100));
         }
 
         // 第 3 级兜底：关键词匹配，100% 可靠
@@ -825,7 +932,7 @@ impl AiTranslator {
             model: settings.model.clone().or_else(|| global_ai.and_then(|g| g.model.clone())),
             api_key: settings.api_key.clone().or_else(|| global_ai.and_then(|g| g.api_key.clone())),
             api_base: settings.api_base.clone().or_else(|| global_ai.and_then(|g| g.api_base.clone())),
-            max_tokens: Some(global_ai.and_then(|g| g.max_tokens).unwrap_or(4096)),
+            max_tokens: None,
             temperature: Some(0.3),
             timeout: Some(global_ai.and_then(|g| g.timeout).unwrap_or(120)),
         };
@@ -843,11 +950,12 @@ impl AiTranslator {
             source_lang: settings
                 .source_lang
                 .clone()
-                .unwrap_or_else(|| "zh".to_string()),
+                .unwrap_or_else(|| String::new()),
             target_lang: settings
                 .target_lang
                 .clone()
-                .unwrap_or_else(|| "en".to_string()),
+                .or_else(|| settings.language.clone())
+                .unwrap_or_else(|| "Chinese".to_string()),
             system_prompt,
             user_prompt_template,
         })
@@ -855,7 +963,11 @@ impl AiTranslator {
 
     pub async fn translate(&self, text: &str) -> Result<TranslationResult> {
         let mut user_prompt = self.user_prompt_template.clone();
-        user_prompt = user_prompt.replace("{source_lang}", &self.source_lang);
+        if self.source_lang.is_empty() {
+            user_prompt = user_prompt.replace("{source_lang}", "auto-detect");
+        } else {
+            user_prompt = user_prompt.replace("{source_lang}", &self.source_lang);
+        }
         user_prompt = user_prompt.replace("{target_lang}", &self.target_lang);
 
         let messages = vec![
@@ -894,7 +1006,11 @@ impl AiTranslator {
             .join("\n\n");
 
         let mut user_prompt = self.user_prompt_template.clone();
-        user_prompt = user_prompt.replace("{source_lang}", &self.source_lang);
+        if self.source_lang.is_empty() {
+            user_prompt = user_prompt.replace("{source_lang}", "auto-detect");
+        } else {
+            user_prompt = user_prompt.replace("{source_lang}", &self.source_lang);
+        }
         user_prompt = user_prompt.replace("{target_lang}", &self.target_lang);
 
         let messages = vec![
@@ -906,6 +1022,7 @@ impl AiTranslator {
         ];
 
         let response = self.client.chat(&messages).await?;
+        tracing::info!("translate_batch: AI返回 {} 字符, 前300字: {}", response.len(), safe_prefix(&response, 300));
 
         let mut results: Vec<Option<String>> = texts.iter().map(|_| None).collect();
         let mut current_num: Option<usize> = None;
@@ -921,7 +1038,13 @@ impl AiTranslator {
                     }
                 }
                 current_num = Some(num);
-                current_text = String::new();
+                // 提取编号后同一行的正文（如果有）
+                let after_bracket = if let Some(pos) = trimmed.find(']') {
+                    trimmed[pos + 1..].trim()
+                } else {
+                    ""
+                };
+                current_text = after_bracket.to_string();
             } else if current_num.is_some() {
                 if !current_text.is_empty() {
                     current_text.push('\n');
@@ -939,12 +1062,18 @@ impl AiTranslator {
         let final_results: Vec<TranslationResult> = texts
             .iter()
             .enumerate()
-            .map(|(i, original)| TranslationResult {
-                original: original.clone(),
-                translated: results[i].clone().unwrap_or_else(|| original.clone()),
-                target_lang: self.target_lang.clone(),
+            .map(|(i, original)| {
+                let translated = results[i].clone().unwrap_or_else(|| original.clone());
+                TranslationResult {
+                    original: original.clone(),
+                    translated,
+                    target_lang: self.target_lang.clone(),
+                }
             })
             .collect();
+
+        let parsed_count = final_results.iter().filter(|r| r.translated != r.original).count();
+        tracing::info!("translate_batch: 成功解析 {} / {} 条翻译", parsed_count, texts.len());
 
         Ok(BatchTranslationResult {
             results: final_results,
@@ -953,12 +1082,17 @@ impl AiTranslator {
 }
 
 fn parse_translation_number(text: &str) -> Option<usize> {
-    let cleaned = text.trim_start_matches('[').trim_end_matches(']');
-    if cleaned.len() <= 3 && cleaned.chars().all(|c| c.is_ascii_digit()) {
-        cleaned.parse().ok()
-    } else {
-        None
+    let text = text.trim();
+
+    if text.starts_with('[') {
+        if let Some(end) = text.find(']') {
+            let num_part = &text[1..end].trim();
+            if !num_part.is_empty() && num_part.chars().all(|c| c.is_ascii_digit()) {
+                return num_part.parse().ok();
+            }
+        }
     }
+    None
 }
 
 // ============================================================================

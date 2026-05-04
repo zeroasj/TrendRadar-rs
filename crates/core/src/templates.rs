@@ -9,6 +9,7 @@ pub struct ReportTemplate {
     pub mode_label: String,
     pub generation_time: String,
     pub stats: Vec<TemplateStatItem>,
+    pub platform_stats: Vec<TemplateStatItem>,
     pub new_titles: Vec<TemplateSourceGroup>,
     pub failed_ids: Vec<String>,
     pub total_new_count: usize,
@@ -22,6 +23,7 @@ pub struct ReportTemplate {
     pub show_rss: bool,
     pub rss_groups: Vec<TemplateRssGroup>,
     pub rss_total: usize,
+    pub default_view: String,
 }
 
 #[derive(Clone)]
@@ -146,26 +148,17 @@ fn convert_title(
 }
 
 impl ReportTemplate {
-    pub fn from_report_data(data: &ReportData, mode_label: &str) -> Self {
-        let stats: Vec<TemplateStatItem> = data
-            .stats
-            .iter()
-            .enumerate()
-            .map(|(i, stat)| {
-                let titles: Vec<TemplateTitleItem> = stat
-                    .titles
-                    .iter()
-                    .enumerate()
-                    .map(|(j, title)| convert_title(title, &stat.word, j + 1))
-                    .collect();
-                TemplateStatItem {
-                    word: stat.word.clone(),
-                    count: stat.count,
-                    index: i + 1,
-                    titles,
-                }
-            })
-            .collect();
+    pub fn from_report_data(
+        data: &ReportData,
+        mode_label: &str,
+        default_view: &str,
+        hotlist_enabled: bool,
+        new_items_enabled: bool,
+        rss_enabled: bool,
+        ai_enabled: bool,
+    ) -> Self {
+        let stats = convert_stats(&data.stats);
+        let platform_stats = convert_stats(&data.platform_stats);
 
         let new_titles: Vec<TemplateSourceGroup> = data
             .new_titles
@@ -184,7 +177,7 @@ impl ReportTemplate {
             })
             .collect();
 
-        let hot_news_count = data.stats.iter().map(|s| s.titles.len()).sum();
+        let hot_news_count = data.filtered_items;
 
         let ai_blocks: Vec<TemplateAiBlock> = if let Some(ref ai) = data.ai_analysis {
             let mut blocks = Vec::new();
@@ -239,19 +232,21 @@ impl ReportTemplate {
             mode_label: mode_label.to_string(),
             generation_time: data.generation_time.clone(),
             stats: stats.clone(),
+            platform_stats,
             new_titles,
             failed_ids: data.failed_ids.clone(),
             total_new_count: data.total_new_count,
             total_items: data.total_items,
             hot_news_count,
             show_error: !data.failed_ids.is_empty(),
-            show_stats: !stats.is_empty(),
-            show_new_section: !data.new_titles.is_empty(),
-            show_ai: !ai_blocks.is_empty(),
+            show_stats: hotlist_enabled && !stats.is_empty(),
+            show_new_section: new_items_enabled && !data.new_titles.is_empty(),
+            show_ai: ai_enabled && !ai_blocks.is_empty(),
             ai_blocks,
-            show_rss: !rss_groups.is_empty(),
+            show_rss: rss_enabled && !rss_groups.is_empty(),
             rss_groups,
             rss_total,
+            default_view: default_view.to_string(),
         }
     }
 }
@@ -298,4 +293,25 @@ fn format_value(value: &serde_json::Value, indent: usize) -> String {
         serde_json::Value::Bool(b) => format!("{}{}", prefix, b),
         serde_json::Value::Null => String::new(),
     }
+}
+
+fn convert_stats(stats: &[crate::report::StatItem]) -> Vec<TemplateStatItem> {
+    stats
+        .iter()
+        .enumerate()
+        .map(|(i, stat)| {
+            let titles: Vec<TemplateTitleItem> = stat
+                .titles
+                .iter()
+                .enumerate()
+                .map(|(j, title)| convert_title(title, &stat.word, j + 1))
+                .collect();
+            TemplateStatItem {
+                word: stat.word.clone(),
+                count: stat.count,
+                index: i + 1,
+                titles,
+            }
+        })
+        .collect()
 }

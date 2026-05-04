@@ -564,6 +564,14 @@ impl StorageManager {
         Ok(())
     }
 
+    pub fn clear_ai_filter_tags(&self) -> Result<()> {
+        let guard = self.connect()?;
+        let conn = guard.as_ref().unwrap();
+        conn.execute("DELETE FROM ai_filter_tags", [])
+            .map_err(|e| TrendRadarError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
     pub fn insert_ai_filter_result(&self, news_url: &str, tag: &str, confidence: Option<f64>, reason: Option<&str>) -> Result<()> {
         let guard = self.connect()?;
         let conn = guard.as_ref().unwrap();

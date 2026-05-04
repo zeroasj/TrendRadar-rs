@@ -448,11 +448,39 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
             None
         });
 
-    let display_settings = config
+    let mut display_settings = config
         .display
         .as_ref()
         .cloned()
         .unwrap_or_default();
+
+    // 读取 display.regions 配置，覆盖 show_* 字段
+    let regions_hotlist = config.display.as_ref()
+        .and_then(|d| d.regions.as_ref())
+        .and_then(|r| if r.hotlist { None } else { Some(false) });
+    let regions_new_items = config.display.as_ref()
+        .and_then(|d| d.regions.as_ref())
+        .and_then(|r| if r.new_items { None } else { Some(false) });
+    let regions_rss = config.display.as_ref()
+        .and_then(|d| d.regions.as_ref())
+        .and_then(|r| if r.rss { None } else { Some(false) });
+    let regions_ai = config.display.as_ref()
+        .and_then(|d| d.regions.as_ref())
+        .and_then(|r| if r.ai_analysis { None } else { Some(false) });
+
+    // regions 未配置时默认全部显示
+    let hotlist_enabled = regions_hotlist.unwrap_or(true);
+    let new_items_enabled = regions_new_items.unwrap_or(true);
+    let rss_enabled = regions_rss.unwrap_or(true);
+    let ai_enabled = regions_ai.unwrap_or(true);
+
+    // 同步到 display_settings 供通知生成使用
+    if let Some(ref regions) = config.display.as_ref().and_then(|d| d.regions.as_ref()) {
+        display_settings.show_frequency_analysis = regions.hotlist;
+        display_settings.show_new_section = regions.new_items;
+        display_settings.show_rss_section = regions.rss;
+        display_settings.show_ai_section = regions.ai_analysis;
+    }
 
     let scheduler = TimelineScheduler::new(config.clone());
 
@@ -626,9 +654,25 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
                     Ok(filter) => {
                         let interests_file = cfg.interests_file.as_deref().unwrap_or("ai_interests.txt");
                         let interests = std::fs::read_to_string(interests_file).unwrap_or_default();
-                        match filter.extract_tags(&interests).await {
+                        let tags = {
+                            let old_tags = storage.get_all_ai_filter_tags().unwrap_or_default();
+                            if old_tags.is_empty() {
+                                filter.extract_tags(&interests).await
+                            } else {
+                                tracing::info!("DB 已有 {} 个标签，进行增量更新...", old_tags.len());
+                                match filter.update_tags(&old_tags, &interests).await {
+                                    Ok(tags) => Ok(tags),
+                                    Err(e) => {
+                                        tracing::warn!("标签增量更新失败，回退全量提取: {}", e);
+                                        filter.extract_tags(&interests).await
+                                    }
+                                }
+                            }
+                        };
+                        match tags {
                             Ok(tags) => {
                                 tracing::info!("AI 提取 {} 个标签", tags.len());
+                                let _ = storage.clear_ai_filter_tags();
                                 for tag in &tags { let _ = storage.upsert_ai_filter_tag(&tag.name); }
                                 let min_score = cfg.min_score.unwrap_or(0.7);
                                 let mut classified: Vec<NewsItem> = Vec::new();
@@ -813,6 +857,24 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
 
             let translate_config = config.ai_translation.as_ref();
             if translate_config.map(|t| t.enabled.unwrap_or(false)).unwrap_or(false) {
+                let translate_rss = translate_config
+                    .and_then(|t| t.scope.as_ref())
+                    .map(|s| s.rss)
+                    .unwrap_or(true);
+                let translate_hotlist = translate_config
+                    .and_then(|t| t.scope.as_ref())
+                    .map(|s| s.hotlist)
+                    .unwrap_or(false);
+                let source_label = translate_config
+                    .and_then(|t| t.source_lang.as_deref())
+                    .unwrap_or("auto")
+                    .to_string();
+                let target_label = translate_config
+                    .and_then(|t| t.target_lang.as_deref())
+                    .or_else(|| translate_config.and_then(|t| t.language.as_deref()))
+                    .unwrap_or("Chinese")
+                    .to_string();
+
                 tracing::info!("AI 翻译功能启动...");
                 match AiTranslator::new(
                     translate_config.unwrap(),
@@ -820,21 +882,28 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
                     translate_config.and_then(|t| t.prompt_file.as_deref()).unwrap_or("ai_translation_prompt.txt"),
                 ) {
                     Ok(translator) => {
-                        // 只翻译 RSS 标题（热榜标题已有中文，不需要翻译）
-                        let rss_titles: Vec<String> = matched_rss.iter().map(|r| r.title.clone()).collect();
-                        if !rss_titles.is_empty() {
-                            tracing::info!("正在批量翻译 {} 条 RSS 标题...", rss_titles.len());
-                            match translator.translate_batch(&rss_titles).await {
-                                Ok(batch_result) => {
-                                    for (i, result) in batch_result.results.iter().enumerate() {
-                                        if i < matched_rss.len() && !result.translated.is_empty() && result.translated != result.original {
-                                            matched_rss[i].title = format!("{} ({})", result.original, result.translated);
+                        if translate_rss {
+                            let rss_titles: Vec<String> = matched_rss.iter().map(|r| r.title.clone()).collect();
+                            if !rss_titles.is_empty() {
+                                tracing::info!("正在批量翻译 {} 条 RSS 标题...", rss_titles.len());
+                                match translator.translate_batch(&rss_titles).await {
+                                    Ok(batch_result) => {
+                                        for (i, result) in batch_result.results.iter().enumerate() {
+                                            if i < matched_rss.len() && !result.translated.is_empty() && result.translated != result.original {
+                                                matched_rss[i].title = format!("{} ({})", result.original, result.translated);
+                                            }
                                         }
+                                        tracing::info!("AI 翻译完成 {} 条 (来源={}, 目标={})",
+                                            batch_result.results.len(),
+                                            source_label, target_label,
+                                        );
                                     }
-                                    tracing::info!("AI 翻译完成 {} 条", batch_result.results.len());
+                                    Err(e) => tracing::warn!("批量翻译失败: {}", e),
                                 }
-                                Err(e) => tracing::warn!("批量翻译失败: {}", e),
                             }
+                        }
+                        if translate_hotlist {
+                            tracing::debug!("AI 翻译热榜已跳过（热榜标题已有中文）");
                         }
                     }
                     Err(e) => tracing::warn!("AI 翻译初始化失败: {}", e),
@@ -846,65 +915,74 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
 
         // 6. 构建报告数据
         tracing::info!("========== 构建报告 ==========");
-        let mut stats_map: std::collections::BTreeMap<String, (usize, Vec<&NewsItem>)> =
-            std::collections::BTreeMap::new();
 
-        let has_keywords = matched_news.iter().any(|item| !item.keywords.is_empty());
+        let report_config = config.report.as_ref();
+        let rank_threshold = report_config
+            .and_then(|r| r.rank_threshold)
+            .unwrap_or(5);
+        let max_titles = report_config
+            .and_then(|r| r.max_news_per_keyword)
+            .filter(|&n| n > 0)
+            .or_else(|| display_settings.max_titles_per_keyword)
+            .unwrap_or(20);
 
-        if has_keywords {
-            for item in &matched_news {
+        let sort_by_position = report_config
+            .and_then(|r| r.sort_by_position_first)
+            .unwrap_or(false);
+
+        let build_stats = |map: std::collections::BTreeMap<String, (usize, Vec<&NewsItem>)>| -> Vec<StatItem> {
+            let mut s: Vec<StatItem> = map.into_iter()
+                .map(|(word, (count, items))| {
+                    let titles: Vec<NewsDisplay> = items.iter().take(max_titles)
+                        .map(|item| NewsDisplay {
+                            title: item.title.clone(),
+                            source_name: item.platform_name.clone().unwrap_or_else(|| item.platform.clone()),
+                            time_display: item.publish_time.map(|t| t.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default(),
+                            count,
+                            ranks: item.rank.map(|r| vec![r as i32]).unwrap_or_default(),
+                            rank_threshold,
+                            url: item.url.clone().unwrap_or_default(),
+                            mobile_url: String::new(),
+                            is_new: item.is_new.unwrap_or(false),
+                        })
+                        .collect();
+                    StatItem { word, count, percentage: (count as f64 / (matched_news.len().max(1)) as f64) * 100.0, titles }
+                })
+                .collect();
+            if !sort_by_position {
+                s.sort_by(|a, b| b.count.cmp(&a.count));
+            }
+            s
+        };
+
+        // 关键词分组
+        let mut keyword_map: std::collections::BTreeMap<String, (usize, Vec<&NewsItem>)> = std::collections::BTreeMap::new();
+        for item in &matched_news {
+            if item.keywords.is_empty() {
+                let entry = keyword_map.entry("其他".to_string()).or_insert((0, vec![]));
+                entry.0 += 1;
+                entry.1.push(item);
+            } else {
                 for kw in &item.keywords {
-                    let entry = stats_map.entry(kw.clone()).or_insert((0, vec![]));
+                    let entry = keyword_map.entry(kw.clone()).or_insert((0, vec![]));
                     entry.0 += 1;
                     entry.1.push(item);
                 }
             }
-        } else {
-            for item in &matched_news {
-                let platform_label = item.platform_name.clone()
-                    .unwrap_or_else(|| item.platform.clone());
-                let entry = stats_map.entry(platform_label).or_insert((0, vec![]));
-                entry.0 += 1;
-                entry.1.push(item);
-            }
         }
+        let stats = build_stats(keyword_map);
 
-        let total_items = matched_news.len().max(1);
+        // 平台分组（始终生成，用于 HTML 切换）
+        let mut platform_map: std::collections::BTreeMap<String, (usize, Vec<&NewsItem>)> = std::collections::BTreeMap::new();
+        for item in &matched_news {
+            let label = item.platform_name.clone().unwrap_or_else(|| item.platform.clone());
+            let entry = platform_map.entry(label).or_insert((0, vec![]));
+            entry.0 += 1;
+            entry.1.push(item);
+        }
+        let platform_stats = build_stats(platform_map);
+
         let total_new = matched_news.iter().filter(|n| n.is_new.unwrap_or(false)).count();
-
-        let mut stats: Vec<StatItem> = stats_map
-            .into_iter()
-            .map(|(word, (count, items))| {
-                let titles: Vec<NewsDisplay> = items
-                    .iter()
-                    .take(display_settings.max_titles_per_keyword.unwrap_or(20))
-                    .map(|item| NewsDisplay {
-                        title: item.title.clone(),
-                        source_name: item
-                            .platform_name
-                            .clone()
-                            .unwrap_or_else(|| item.platform.clone()),
-                        time_display: item
-                            .publish_time
-                            .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
-                            .unwrap_or_default(),
-                        count,
-                        ranks: item.rank.map(|r| vec![r as i32]).unwrap_or_default(),
-                        rank_threshold: 5,
-                        url: item.url.clone().unwrap_or_default(),
-                        mobile_url: String::new(),
-                        is_new: item.is_new.unwrap_or(false),
-                    })
-                    .collect();
-                StatItem {
-                    word,
-                    count,
-                    percentage: (count as f64 / total_items as f64) * 100.0,
-                    titles,
-                }
-            })
-            .collect();
-        stats.sort_by(|a, b| b.count.cmp(&a.count));
 
         let generation_time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
@@ -912,6 +990,11 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
         let mut rss_group_map: std::collections::BTreeMap<String, Vec<&RssItem>> = std::collections::BTreeMap::new();
         for rss_item in &matched_rss {
             rss_group_map.entry(rss_item.feed_name.clone()).or_default().push(rss_item);
+        }
+        // 诊断：打印前3条 RSS 标题确认翻译结果
+        for (i, item) in matched_rss.iter().take(3).enumerate() {
+            let preview: String = item.title.chars().take(120).collect();
+            tracing::info!("RSS[{}] feed={} title={}", i, item.feed_name, preview);
         }
         let rss_groups: Vec<RssGroup> = rss_group_map.into_iter().map(|(name, items)| {
             RssGroup {
@@ -936,7 +1019,9 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
             new_titles: vec![],
             failed_ids: failed_ids.clone(),
             total_new_count: total_new,
-            total_items: matched_news.len(),
+            total_items: all_news.len(),
+            filtered_items: matched_news.len(),
+            platform_stats: platform_stats.clone(),
             update_info: None,
             ai_analysis: ai_analysis_result,
             rss_groups,
@@ -956,7 +1041,11 @@ async fn run_pipeline(config: Arc<AppConfig>, cli_mode: Option<String>, once: bo
         let rss_path = report_writer.write_latest("rss", &rss);
         tracing::info!("RSS 报告: {}", rss_path);
 
-        let html = ReportTemplate::from_report_data(&report_data, &mode_label)
+        let html = ReportTemplate::from_report_data(
+            &report_data, &mode_label,
+            report_config.and_then(|r| r.display_mode.as_deref()).unwrap_or("keyword"),
+            hotlist_enabled, new_items_enabled, rss_enabled, ai_enabled,
+        )
             .render()
             .unwrap_or_else(|e| {
                 tracing::warn!("HTML 模板渲染失败: {}", e);

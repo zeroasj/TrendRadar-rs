@@ -79,6 +79,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub show_schedule: Option<bool>,
     #[serde(default)]
+    pub show_version_update: Option<bool>,
+    #[serde(default)]
     pub max_workers: Option<usize>,
 }
 
@@ -169,6 +171,14 @@ pub struct ReportSettings {
     pub mode: Option<String>,
     #[serde(default)]
     pub output_dir: Option<String>,
+    #[serde(default)]
+    pub display_mode: Option<String>,
+    #[serde(default)]
+    pub sort_by_position_first: Option<bool>,
+    #[serde(default)]
+    pub rank_threshold: Option<i32>,
+    #[serde(default)]
+    pub max_news_per_keyword: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -181,6 +191,8 @@ pub struct FilterSettings {
     pub exclude_keywords: Vec<String>,
     #[serde(default)]
     pub min_title_length: Option<usize>,
+    #[serde(default)]
+    pub priority_sort_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -228,6 +240,8 @@ pub struct DisplaySettings {
     pub region_order: Vec<String>,
     #[serde(default)]
     pub standalone: StandaloneSettings,
+    #[serde(default)]
+    pub regions: Option<DisplayRegions>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -238,6 +252,20 @@ pub struct StandaloneSettings {
     pub rss_feeds: Vec<String>,
     #[serde(default)]
     pub max_items: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DisplayRegions {
+    #[serde(default)]
+    pub hotlist: bool,
+    #[serde(default)]
+    pub new_items: bool,
+    #[serde(default)]
+    pub rss: bool,
+    #[serde(default)]
+    pub standalone: bool,
+    #[serde(default)]
+    pub ai_analysis: bool,
 }
 
 impl Default for DisplaySettings {
@@ -261,6 +289,7 @@ impl Default for DisplaySettings {
                 "ai_analysis".to_string(),
             ],
             standalone: StandaloneSettings::default(),
+            regions: None,
         }
     }
 }
@@ -420,6 +449,24 @@ pub struct AiAnalysisSettings {
     pub language: Option<String>,
     #[serde(default)]
     pub max_news_for_analysis: Option<usize>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub include_rss: Option<bool>,
+    #[serde(default)]
+    pub include_standalone: Option<bool>,
+    #[serde(default)]
+    pub include_rank_timeline: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TranslationScope {
+    #[serde(default)]
+    pub hotlist: bool,
+    #[serde(default)]
+    pub rss: bool,
+    #[serde(default)]
+    pub standalone: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -435,10 +482,77 @@ pub struct AiTranslationSettings {
     pub target_lang: Option<String>,
     #[serde(default)]
     pub prompt_file: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub scope: Option<TranslationScope>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CrawlerAdvancedSettings {
+    #[serde(default)]
+    pub request_interval: Option<u64>,
+    #[serde(default)]
+    pub use_proxy: Option<bool>,
+    #[serde(default)]
+    pub default_proxy: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RssAdvancedSettings {
+    #[serde(default)]
+    pub request_interval: Option<u64>,
+    #[serde(default)]
+    pub timeout: Option<u64>,
+    #[serde(default)]
+    pub use_proxy: Option<bool>,
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WeightSettings {
+    #[serde(default)]
+    pub rank: Option<f64>,
+    #[serde(default)]
+    pub frequency: Option<f64>,
+    #[serde(default)]
+    pub hotness: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BatchSizeSettings {
+    pub default: Option<usize>,
+    pub dingtalk: Option<usize>,
+    pub feishu: Option<usize>,
+    pub bark: Option<usize>,
+    pub slack: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AdvancedSettings {
+    #[serde(default)]
+    pub debug: Option<bool>,
+    #[serde(default)]
+    pub version_check_url: Option<String>,
+    #[serde(default)]
+    pub mcp_version_check_url: Option<String>,
+    #[serde(default)]
+    pub configs_version_check_url: Option<String>,
+    #[serde(default)]
+    pub crawler: Option<CrawlerAdvancedSettings>,
+    #[serde(default)]
+    pub rss: Option<RssAdvancedSettings>,
+    #[serde(default)]
+    pub weight: Option<WeightSettings>,
+    #[serde(default)]
+    pub max_accounts_per_channel: Option<usize>,
+    #[serde(default)]
+    pub batch_size: Option<BatchSizeSettings>,
+    #[serde(default)]
+    pub batch_send_interval: Option<u64>,
+    #[serde(default)]
+    pub feishu_message_separator: Option<String>,
     pub request_delay: Option<u64>,
     pub request_timeout: Option<u64>,
     pub max_retries: Option<u32>,

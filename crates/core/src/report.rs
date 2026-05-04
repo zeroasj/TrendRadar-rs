@@ -23,6 +23,8 @@ pub struct ReportData {
     pub failed_ids: Vec<String>,
     pub total_new_count: usize,
     pub total_items: usize,
+    pub filtered_items: usize,
+    pub platform_stats: Vec<StatItem>,
     pub update_info: Option<UpdateInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ai_analysis: Option<AiAnalysisResult>,
@@ -538,6 +540,8 @@ mod tests {
             failed_ids: vec!["test_platform".to_string()],
             total_new_count: 1,
             total_items: 15,
+            filtered_items: 10,
+            platform_stats: vec![],
             update_info: None,
             ai_analysis: None,
         }

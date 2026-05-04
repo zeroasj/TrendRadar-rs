@@ -198,6 +198,9 @@ docker run --rm \
 │   ├── config.yaml     ← 主配置文件
 │   ├── timeline.yaml   ← 调度模板
 │   └── ai_filter/      ← AI 筛选提示词
+│       ├── prompt.txt
+│       ├── extract_prompt.txt
+│       └── update_tags_prompt.txt
 └── data/               ← 自动生成（数据库，可通过 storage.data_dir 配置到其他位置）
 ```
 
@@ -439,6 +442,33 @@ rss:
 ```
 
 > `enabled: true` 是默认值，不填也可。写 `enabled: false` 可以禁用某个源。
+
+### 4.10 推送区域开关
+
+控制推送消息中显示哪些内容块：
+
+```yaml
+display:
+  regions:
+    hotlist: true           # 热榜区域
+    new_items: false        # 新增热点（关了不显示）
+    rss: true               # RSS 区域
+    ai_analysis: true       # AI 分析区域
+```
+
+### 4.9 AI 翻译（RSS 英文源自动翻中文）
+
+```yaml
+ai_translation:
+  enabled: true            # 是否启用翻译
+  source_lang: ""          # 源语言：留空 = AI 自动检测（推荐），指定如 "en"
+  target_lang: "zh"        # 目标语言：简体中文
+  scope:
+    rss: true              # 翻译 RSS 标题
+    hotlist: false         # 热榜已有中文，无需翻译
+```
+
+> `source_lang` 留空时，AI 自动检测每条 RSS 的语言：中文保留原文，英文翻成 `target_lang`。混合多语言 RSS 源也可以放在一起批量翻译。
 
 ---
 
@@ -888,6 +918,9 @@ TrendRadar-rs/
 │   ├── ai_analysis_prompt.txt
 │   ├── ai_translation_prompt.txt
 │   └── ai_filter/          ← AI 筛选提示词
+│       ├── prompt.txt
+│       ├── extract_prompt.txt
+│       └── update_tags_prompt.txt
 │
 ├── crates/core/templates/  ← HTML 报告模板
 │   ├── base.html           ← 基础布局

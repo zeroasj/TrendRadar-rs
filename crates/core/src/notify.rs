@@ -84,6 +84,13 @@ pub fn get_batch_header(format_type: &str, batch_num: usize, total_batches: usiz
     }
 }
 
+pub fn limit_accounts<T>(accounts: &[T], max: Option<usize>) -> &[T] {
+    match max {
+        Some(n) if n < accounts.len() => &accounts[..n],
+        _ => accounts,
+    }
+}
+
 pub fn add_batch_headers(
     batches: &[String],
     format_type: &str,
@@ -1349,6 +1356,12 @@ impl Notifier {
         let proxy_url: Option<&str> = self.config.advanced.as_ref()
             .and_then(|a| a.proxy_url.as_deref());
 
+        let max_accounts = self.config.advanced.as_ref()
+            .and_then(|a| a.max_accounts_per_channel)
+            .filter(|&n| n > 0);
+        let feishu_sep = self.config.advanced.as_ref()
+            .and_then(|a| a.feishu_message_separator.as_deref());
+
         for channel in &channels {
             let batch_size = get_batch_size_for_channel(channel);
             let batches = split_content_by_bytes(content, batch_size);
@@ -1365,12 +1378,18 @@ impl Notifier {
 
             let batch_result = match channel_lower.as_str() {
                 "feishu" if !notification.channels.feishu.is_empty() => {
+                    let accounts = limit_accounts(&notification.channels.feishu, max_accounts);
+                    let batches: Vec<String> = if let Some(sep) = feishu_sep {
+                        batches.iter().map(|b| b.replace("\n---\n", &format!("\n{}\n", sep))).collect()
+                    } else {
+                        batches.clone()
+                    };
                     let (success, fail) = self.send_channel_batches(
                         &batches, report_type, proxy_url,
                         |cfg, content, rt, px, label, bn, tb| {
                             Box::pin(crate::notify::send_to_feishu(cfg, content, rt, px, label, bn, tb))
                         },
-                        &notification.channels.feishu,
+                        accounts,
                     ).await;
                     Ok::<_, TrendRadarError>((success, fail))
                 }
@@ -1380,7 +1399,7 @@ impl Notifier {
                         |cfg, content, rt, px, label, bn, tb| {
                             Box::pin(crate::notify::send_to_dingtalk(cfg, content, rt, px, label, bn, tb))
                         },
-                        &notification.channels.dingtalk,
+                        limit_accounts(&notification.channels.dingtalk, max_accounts),
                     ).await;
                     Ok::<_, TrendRadarError>((success, fail))
                 }
@@ -1390,7 +1409,7 @@ impl Notifier {
                         |cfg, content, rt, px, label, bn, tb| {
                             Box::pin(crate::notify::send_to_wecom(cfg, content, rt, px, label, bn, tb, "markdown"))
                         },
-                        &notification.channels.wework,
+                        limit_accounts(&notification.channels.wework, max_accounts),
                     ).await;
                     Ok::<_, TrendRadarError>((success, fail))
                 }
@@ -1400,7 +1419,7 @@ impl Notifier {
                         |cfg, content, rt, px, label, bn, tb| {
                             Box::pin(crate::notify::send_to_telegram(cfg, content, rt, px, label, bn, tb))
                         },
-                        &notification.channels.telegram,
+                        limit_accounts(&notification.channels.telegram, max_accounts),
                     ).await;
                     Ok::<_, TrendRadarError>((success, fail))
                 }
@@ -1412,7 +1431,8 @@ impl Notifier {
                     };
                     let email_batches = vec![email_html];
                     let (success, fail) = self.send_email_batches(
-                        &email_batches, report_type, &notification.channels.email,
+                        &email_batches, report_type,
+                        limit_accounts(&notification.channels.email, max_accounts),
                     ).await;
                     Ok::<_, TrendRadarError>((success, fail))
                 }
@@ -1422,7 +1442,7 @@ impl Notifier {
                         |cfg, content, rt, px, label, bn, tb| {
                             Box::pin(crate::notify::send_to_bark(cfg, content, rt, px, label, bn, tb))
                         },
-                        &notification.channels.bark,
+                        limit_accounts(&notification.channels.bark, max_accounts),
                     ).await;
                     Ok::<_, TrendRadarError>((success, fail))
                 }
@@ -1432,7 +1452,7 @@ impl Notifier {
                         |cfg, content, rt, px, label, bn, tb| {
                             Box::pin(crate::notify::send_to_ntfy(cfg, content, rt, px, label, bn, tb))
                         },
-                        &notification.channels.ntfy,
+                        limit_accounts(&notification.channels.ntfy, max_accounts),
                     ).await;
                     Ok::<_, TrendRadarError>((success, fail))
                 }
@@ -1442,7 +1462,7 @@ impl Notifier {
                         |cfg, content, rt, px, label, bn, tb| {
                             Box::pin(crate::notify::send_to_slack(cfg, content, rt, px, label, bn, tb))
                         },
-                        &notification.channels.slack,
+                        limit_accounts(&notification.channels.slack, max_accounts),
                     ).await;
                     Ok::<_, TrendRadarError>((success, fail))
                 }

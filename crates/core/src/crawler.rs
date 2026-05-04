@@ -245,7 +245,8 @@ impl RssFetcher {
             .and_then(|a| a.request_delay)
             .unwrap_or(2000);
         let timeout = config.advanced.as_ref()
-            .and_then(|a| a.request_timeout)
+            .and_then(|a| a.rss.as_ref())
+            .and_then(|r| r.timeout)
             .unwrap_or(15);
         let freshness = rss.and_then(|r| r.freshness_filter.as_ref());
         let freshness_enabled = freshness.map(|f| f.enabled).unwrap_or(true);
