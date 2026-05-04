@@ -302,38 +302,102 @@ pub fn generate_notification_content(
         ));
     }
 
-    if let Some(ref ai) = data.ai_analysis {
-        content.push_str(&ai.to_markdown());
-        content.push_str("\n---\n\n");
-    }
-
-    if display.show_frequency_analysis && !data.stats.is_empty() {
+    let hotlist_md = if display.show_frequency_analysis && !data.stats.is_empty() {
+        let mut s = String::new();
         let section_title = if data.stats.iter().any(|s| s.count > 1 && s.titles.iter().any(|t| t.source_name != s.word)) {
             "🔥 **关键词热度分析**\n\n"
         } else {
             "📱 **各平台热点**\n\n"
         };
-        content.push_str(section_title);
+        s.push_str(section_title);
         for (i, stat) in data.stats.iter().enumerate() {
             if i >= display.max_keywords_display.unwrap_or(10) {
                 break;
             }
-            content.push_str(&format!(
+            s.push_str(&format!(
                 "**{}. {}** ({}次, {:.1}%)\n",
                 i + 1,
                 stat.word,
                 stat.count,
                 stat.percentage
             ));
-
             for (j, title) in stat.titles.iter().enumerate() {
                 if j >= display.max_titles_per_keyword.unwrap_or(5) {
                     break;
                 }
                 let new_marker = if title.is_new { "🆕 " } else { "" };
-                content.push_str(&format!("  - {}{}\n", new_marker, title.title));
+                s.push_str(&format!("  - {}{}\n", new_marker, title.title));
             }
-            content.push('\n');
+            s.push('\n');
+        }
+        Some(s)
+    } else {
+        None
+    };
+
+    let new_items_md = if display.show_new_section && !data.new_titles.is_empty() {
+        let mut s = String::from("🆕 **新增热点**\n\n");
+        for source in &data.new_titles {
+            s.push_str(&format!("**{}**\n", source.source_name));
+            for title in source.titles.iter().take(display.max_titles_per_keyword.unwrap_or(5)) {
+                s.push_str(&format!("  - {}\n", title.title));
+            }
+            s.push('\n');
+        }
+        Some(s)
+    } else {
+        None
+    };
+
+    let rss_md = if display.show_rss_section && !data.rss_groups.is_empty() {
+        let mut s = String::from("📰 **RSS 订阅更新**\n\n");
+        for group in &data.rss_groups {
+            s.push_str(&format!("**{}** ({}条)\n", group.name, group.count));
+            for item in group.items.iter().take(10) {
+                s.push_str(&format!("  - {}\n", item.title));
+            }
+            s.push('\n');
+        }
+        Some(s)
+    } else {
+        None
+    };
+
+    let ai_md = data.ai_analysis.as_ref().map(|ai| {
+        let mut s = ai.to_markdown();
+        s.push_str("\n---\n\n");
+        s
+    });
+
+    let order = if display.region_order.is_empty() {
+        &DisplaySettings::default().region_order
+    } else {
+        &display.region_order
+    };
+
+    for region in order {
+        match region.as_str() {
+            "ai_analysis" => {
+                if let Some(ref md) = ai_md {
+                    content.push_str(md);
+                }
+            }
+            "hotlist" => {
+                if let Some(ref md) = hotlist_md {
+                    content.push_str(md);
+                }
+            }
+            "new_items" => {
+                if let Some(ref md) = new_items_md {
+                    content.push_str(md);
+                }
+            }
+            "rss" => {
+                if let Some(ref md) = rss_md {
+                    content.push_str(md);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -544,6 +608,8 @@ mod tests {
             platform_stats: vec![],
             update_info: None,
             ai_analysis: None,
+            rss_groups: vec![],
+            rss_total: 0,
         }
     }
 
